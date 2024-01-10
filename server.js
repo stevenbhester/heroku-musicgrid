@@ -107,10 +107,10 @@ app.post('/search-encoding-answer', async (req, res) => {
             let artistMatch = false;
             let resultName = song.name.toLowerCase().trim().replace(/\s|'/g, ""));
             let searchName = searchTerm.toLowerCase().trim().replace(/\s|'/g, ""));
-            console.log(`Comparing name result/search of "${resultName}"/"${searchName}"`);
+            console.log(`Comparing name result:search of "${resultName}":"${searchName}"`);
             if ( resultName == searchName ) {
                 songMatch = true;
-                console.log(`NAME MATCH FOUND FOR ${searchName}!`);
+                console.log(`NAME MATCH FOUND FOR: ${searchName}!`);
                 song.artists.forEach(artist => {
                     let resultArtist = artist.name.toLowerCase().trim();
                     let searchArtist = artistSearch.toLowerCase().trim();
