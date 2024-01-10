@@ -9,8 +9,8 @@ app.use(cors({
     origin: 'https://musicgrid.erincullison.com'
 }));
 
-const CLIENT_ID = '1d952129111a45b2b86ea1c08dd9c6ca';  // Replace with your Spotify Client ID
-const CLIENT_SECRET = 'c6ddfe3768bf43e092a68bfe0e9f3e6a';  // Replace with your Spotify Client Secret
+const CLIENT_ID = '1d952129111a45b2b86ea1c08dd9c6ca';  
+const CLIENT_SECRET = 'c6ddfe3768bf43e092a68bfe0e9f3e6a';  
 
 // PostgreSQL connection using Pool
 const pool = new Pool({
@@ -32,7 +32,7 @@ async function getSpotifyAccessToken() {
     return tokenResponse.data.access_token;
 }
 
-// Endpoint to search songs on Spotify
+// Endpoint to search song guesses on Spotify
 app.post('/search', async (req, res) => {
     try {
         const searchTerm = req.body.searchTerm;
@@ -65,7 +65,7 @@ app.post('/search', async (req, res) => {
 });
 
 
-// Endpoint to search songs on Spotify
+// Endpoint to search song answers on Spotify
 app.post('/search-encoding-answer', async (req, res) => {
     const searchTerm = req.body.searchTerm;
     const encoderReq = req.body.encoderReq || false;
@@ -105,8 +105,8 @@ app.post('/search-encoding-answer', async (req, res) => {
         if(!matchFound) {
             let songMatch = false;
             let artistMatch = false;
-            let resultName = song.name.toLowerCase().trim();
-            let searchName = searchTerm.toLowerCase().trim();
+            let resultName = song.name.toLowerCase().trim().replace(/\s|'/g, ""));
+            let searchName = searchTerm.toLowerCase().trim().replace(/\s|'/g, ""));
             console.log(`Comparing name result/search of "${resultName}"/"${searchName}"`);
             if ( resultName == searchName ) {
                 songMatch = true;
