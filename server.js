@@ -88,8 +88,10 @@ app.post('/search-encoding-answer', async (req, res) => {
         } else {
             artistSearchAppend = ` artist:"${artistSearch}"`;
         }
-        console.log('Fetching from spotify:' + `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchTermAppend)}${encodeURIComponent(artistSearchAppend)}&type=track&market=US&limit=${limit}`);
-        searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchTermAppend)}${encodeURIComponent(artistSearchAppend)}&type=track&market=US&limit=${limit}`, {
+        let searchableSong = encodeURIComponent(searchTermAppend).replace(/\s|'/g,"%27");
+        let searchableArtist = encodeURIComponent(artistSearchAppend).replace(/\s|'/g,"%27");
+        console.log('Fetching from spotify:' + `https://api.spotify.com/v1/search?q=${searchableSong}${searchableArtist}&type=track&market=US&limit=${limit}`);
+        searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${searchableSong}${searchableArtist}&type=track&market=US&limit=${limit}`, {
             headers: {
                 'Authorization': `Bearer ${accessToken}`
             }
