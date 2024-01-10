@@ -99,6 +99,8 @@ app.post('/search-encoding-answer', async (req, res) => {
         res.status(500).send('Error during search');
     }
 
+    console.log("Spotify returned "+searchResponsedata.tracks.total+" results to parse");
+    
     let matchFound = false;
     let fallbackObj = {};
     searchResponse.data.tracks.items.forEach(song => {
