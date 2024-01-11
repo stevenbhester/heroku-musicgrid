@@ -82,7 +82,7 @@ app.post('/search-encoding-answer', async (req, res) => {
         if(encoderReq) {
             limit = 50;
         }
-        searchTermAppend = `track:"${searchTerm}"`;
+        searchTermAppend = `"${searchTerm}"`;
         if(artistSearch.length === 0 || artistSearch === null) {
             artistSearchAppend = ``;
         } else {
