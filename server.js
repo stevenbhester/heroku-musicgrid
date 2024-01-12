@@ -304,7 +304,7 @@ app.post('/list-songs-by-duration', async (req, res) => {
                 if (song.duration_ms < maxDuration && song.duration_ms > minDuration) {
                     durationMatch = true;
                     let durationMinutes = Math.round(song.duration_ms/6000,1)/10
-                    console.log(`Duration matched for song "${song.name}" of dur "${durationMinutes}`);
+                    console.log(`Duration matched for song "${song.name}" of dur ${durationMinutes} minutes (${maxDuration} > ${song.duration_ms} ms > ${minDuration})`);
                     song.artists.forEach(artist => {
                         if(artist.name.toLowerCase().trim() == artistName.toLowerCase().trim()) {
                             artistMatch = true;
