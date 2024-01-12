@@ -375,7 +375,7 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
         const artistSearchComponent = 'artist:' + artistName;
         let offset = 0;
         let totalResults = 0;
-        const songsMatchingDuration = [];
+        const songsMatchingWordCount = [];
         const accessToken = await getSpotifyAccessToken();
 
         do {
