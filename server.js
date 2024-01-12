@@ -20,6 +20,7 @@ const pool = new Pool({
     }
 });
 
+
 // Function to get Spotify access token
 async function getSpotifyAccessToken() {
     const tokenResponse = await axios.post('https://accounts.spotify.com/api/token', 'grant_type=client_credentials', {
