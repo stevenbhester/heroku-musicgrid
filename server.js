@@ -395,7 +395,7 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
                             artistMatch = true;
                         }
                     });
-                    if(dateMatch && lengthMatch) {
+                    if(lengthMatch && artistMatch) {
                         songsMatchingWordCount.push(song.name);
                     }
                 }
