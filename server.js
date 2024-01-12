@@ -212,7 +212,7 @@ app.post('/check-answer', async (req, res) => {
     try {
         const { songGuess, fieldGuessed, gridId } = req.body;
         const songGuessIlike = `%${songGuess}%`
-        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = CAST($3 AS VARCHAR(10)) AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = CAST($3 AS VARCHAR(10)) AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
         const { rows } = await pool.query(query, [songGuess, fieldGuessed, gridId, songGuessIlike]);
         console.log( rows ); 
         res.json(rows);
