@@ -38,7 +38,7 @@ app.post('/search', async (req, res) => {
     try {
         const searchTerm = req.body.searchTerm;
         const easyModeBool = req.body.easyModeBool || false;
-        const artistSearch = req.body.artistSearch || '';
+        const artistSearch = req.body.artistName || '';
         const accessToken = await getSpotifyAccessToken();
         let searchTermAppend = `"${searchTerm}"`;
         let artistSearchAppend = '';
