@@ -462,7 +462,23 @@ app.post('/fetch-top-artists', async (req, res) => {
         });
         resultArtists = searchResponse.data.items;
         searchResponse.data.items.forEach(artist => {
-            topArtists.push({id: artist.id, name: artist.name});
+            let artistPic = "/img/noArtist.png";
+            let artistPicArray = [];
+            let found160 = false;
+            let foundAnyPics = false;
+            artist.images.forEach(artistImage => {
+                if (artistImage.height = 160) {
+                    aristPic = artistImage.url;
+                    found160 = true;
+                } else if ( !found160 AND artistImage.height >= 160 ) {
+                    artistPicArray.push(url);
+                    foundAnyPics = true;
+                }
+            });
+            if (!found160 AND foundAnyPics) {
+                artistPic = artistPicArray[artistPicArray.length - 1];
+            }
+            topArtists.push({id: artist.id, name: artist.name, img:artistPic});
         });
         
         res.json(Array.from(new Set(songsMatchingWordCount)));
