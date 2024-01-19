@@ -182,6 +182,21 @@ app.get('/latest-grid', async (req, res) => {
     }
 });
 
+//Endpoint to get ID of the current grid we should serve
+app.post('/set-grid-live', async (req, res) => {
+    try {
+        const { grid_id } = req.body;
+        const setOffQuery = 'UPDATE musicgrid_templates SET is_live = FALSE WHERE grid_id <> CAST($1 AS VARCHAR(10))';
+        const setLiveQuery = 'UPDATE musicgrid_templates SET is_live = TRUE WHERE grid_id = CAST($1 AS VARCHAR(10))';
+        const { rows } = await pool.query(setOffQuery, [grid_id]);
+        const { rows2 } = await pool.query(setLiveQuery, [grid_id]);
+        res.json( rows2);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error setting grid live');
+    }
+});
+
 //Endpoint to get contents of current live grid
 app.post('/grid-data', async (req, res) => {
     try {
