@@ -60,7 +60,19 @@ app.post('/search', async (req, res) => {
             }
         });
 
-        res.json(searchResponse.data.tracks.items);
+        songMatches = [];
+        searchResponse.data.tracks.items.forEach(song => {
+                    let artistMatch = false;
+                    song.artists.forEach(artist => {
+                        if(artist.name.toLowerCase().trim() == artistName.toLowerCase().trim()) {
+                            artistMatch = true;
+                        }
+                    });
+                    if(artistMatch) {
+                        songMatches.push(song);
+                    }
+                });
+        res.json(songMatches);
     } catch (error) {
         console.error('Error during search: ', error);
         res.status(500).send('Error during search');
