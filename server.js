@@ -443,48 +443,31 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
     }
 });
 
-app.post('/fetch-user-data', async (req, res) => {
+app.post('/fetch-top-artists', async (req, res) => {
     try {
-        let accessToken = localStorage.getItem('access_token');
-        const response = await fetch('https://api.spotify.com/v1/me', { // Swap to correct endpoint
+        const accessToken = req.body.accessToken;
+        const timeRange = req.body.timeRange || 'Medium Term';
+        let time_range_parsed = 'medium_term';
+        if ( timeRange == "Long Term" ) {
+            time_range_period = "long-term";
+        } else if (timeRange == "Short Term") {
+               time_range_period = 'short-term";
+        }
+        
+        let topArtists = [];
+        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists/${encodeURIComponent(time_range)}`, {
             headers: {
-              Authorization: 'Bearer ' + accessToken
+                'Authorization': `Bearer ${accessToken}`
             }
         });
-
-        const artistSearchComponent = 'artist:' + artistName;
-        let offset = 0;
-        let totalResults = 0;
-        const songsMatchingWordCount = [];
-        const accessToken = await getSpotifyAccessToken();
-
-        do {
-            const searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${encodeURIComponent(artistSearchComponent)}&type=track&market=US&offset=${offset}&limit=50`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
-            totalResults = searchResponse.data.tracks.total;
-            searchResponse.data.tracks.items.forEach(song => {
-                let lengthMatch = false;
-                let artistMatch = false;
-                if (song.name.split(" ").length == wordCount) {
-                    lengthMatch = true;
-                    song.artists.forEach(artist => {
-                        if(artist.name.toLowerCase().trim() == artistName.toLowerCase().trim()) {
-                            artistMatch = true;
-                        }
-                    });
-                    if(lengthMatch && artistMatch) {
-                        songsMatchingWordCount.push(song.name);
-                    }
-                }
-            });
-            offset += 50;
-        } while (offset < totalResults);
+        resultArtists = searchResponse.data.items;
+        searchResponse.data.items.forEach(artist => {
+            topArtists.push({id: artist.id, name: artist.name});
+        });
+        
         res.json(Array.from(new Set(songsMatchingWordCount)));
     } catch (error) {
-        console.error('Error during search: ', error);
-        res.status(500).send('Error during search');
+        console.error('Error looking up top artists: ', error);
+        res.status(500).send('Error looking up top artists');
     }
 });
