@@ -172,7 +172,7 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 //Endpoint to get ID of the current grid we should serve
 app.get('/latest-grid', async (req, res) => {
     try {
-        const query = 'SELECT grid_id FROM musicgrid_templates WHERE reporting_day <= CURRENT_DATE ORDER BY is_live ASC, reporting_day DESC, grid_id DESC LIMIT 1';
+        const query = 'SELECT grid_id FROM musicgrid_templates WHERE reporting_day <= CURRENT_DATE ORDER BY is_live DESC, reporting_day DESC, grid_id DESC LIMIT 1';
         const result = await pool.query(query);
         const latestGridId = result.rows[0].grid_id; 
         res.json({ latestGridId });
