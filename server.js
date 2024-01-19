@@ -64,7 +64,7 @@ app.post('/search', async (req, res) => {
         searchResponse.data.tracks.items.forEach(song => {
                     let artistMatch = false;
                     song.artists.forEach(artist => {
-                        if(artist.name.toLowerCase().trim() == artistName.toLowerCase().trim()) {
+                        if(artist.name.toLowerCase().trim() == artistSearch.toLowerCase().trim()) {
                             artistMatch = true;
                         }
                     });
