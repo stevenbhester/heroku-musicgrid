@@ -48,8 +48,10 @@ app.post('/search', async (req, res) => {
         }
         if(artistSearch.length === 0 || artistSearch === null) {
             artistSearchAppend = '';
-        } else {
+        } else if (easyModeBool) {
             artistSearchAppend = ` ${artistSearch}`;
+        } else {
+            artistSearchAppend = ` artist:"${artistSearch}"`;
         }
         console.log('Fetching from spotify:' + `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchTermAppend)}${encodeURIComponent(artistSearchAppend)}&type=track&market=US&limit=10`);
         const searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchTermAppend)}${encodeURIComponent(artistSearchAppend)}&type=track&market=US&limit=10`, {
