@@ -456,7 +456,7 @@ app.post('/fetch-top-artists', async (req, res) => {
         }
         
         let topArtists = [];
-        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists/${encodeURIComponent(timeRangeParsed)}`, {
+        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${encodeURIComponent(timeRangeParsed)}`, {
             headers: {
                 'Authorization': `Bearer ${accessToken}`
             }
