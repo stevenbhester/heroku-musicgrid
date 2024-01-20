@@ -452,7 +452,7 @@ app.post('/fetch-top-artists', async (req, res) => {
         if ( timeRange == "Long Term" ) {
             time_range_period = "long-term";
         } else if (timeRange == "Short Term") {
-               time_range_period = 'short-term";
+               time_range_period = "short-term";
         }
         
         let topArtists = [];
