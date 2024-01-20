@@ -472,7 +472,7 @@ app.post('/fetch-top-artists', async (req, res) => {
                     aristPic = artistImage.url;
                     found160 = true;
                 } else if ( !found160 && artistImage.height >= 160 ) {
-                    artistPicArray.push(url);
+                    artistPicArray.push(artistImage.url);
                     foundAnyPics = true;
                 }
             });
