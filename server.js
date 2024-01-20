@@ -476,7 +476,7 @@ app.post('/fetch-top-artists', async (req, res) => {
                     foundAnyPics = true;
                 }
             });
-            if (!found160 AND foundAnyPics) {
+            if (!found160 && foundAnyPics) {
                 artistPic = artistPicArray[artistPicArray.length - 1];
             }
             topArtists.push({id: artist.id, name: artist.name, img:artistPic});
