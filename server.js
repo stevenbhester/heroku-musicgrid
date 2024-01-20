@@ -468,7 +468,7 @@ app.post('/fetch-top-artists', async (req, res) => {
             let found160 = false;
             let foundAnyPics = false;
             artist.images.forEach(artistImage => {
-                if (artistImage.height = 160) {
+                if (artistImage.height == 160) {
                     aristPic = artistImage.url;
                     found160 = true;
                 } else if ( !found160 && artistImage.height >= 160 ) {
