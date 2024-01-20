@@ -482,7 +482,7 @@ app.post('/fetch-top-artists', async (req, res) => {
             topArtists.push({id: artist.id, name: artist.name, img:artistPic});
         });
         
-        res.json(Array.from(new Set(songsMatchingWordCount)));
+        res.json(Array.from(new Set(topArtists )));
     } catch (error) {
         console.error('Error looking up top artists: ', error);
         res.status(500).send('Error looking up top artists');
