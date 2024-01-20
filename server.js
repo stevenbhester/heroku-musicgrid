@@ -450,13 +450,13 @@ app.post('/fetch-top-artists', async (req, res) => {
         const timeRange = req.body.timeRange || 'Medium Term';
         let timeRangeParsed = 'medium_term';
         if ( timeRange == "Long Term" ) {
-            timeRangeParsed = "long-term";
+            timeRangeParsed = "long_term";
         } else if (timeRange == "Short Term") {
-               timeRangeParsed = "short-term";
+               timeRangeParsed = "short_term";
         }
         
         let topArtists = [];
-        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${encodeURIComponent(timeRangeParsed)}`, {
+        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${timeRangeParsed}`, {
             headers: {
                 'Authorization': `Bearer ${accessToken}`
             }
