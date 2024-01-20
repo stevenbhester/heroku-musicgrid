@@ -442,3 +442,48 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
         res.status(500).send('Error during search');
     }
 });
+
+app.post('/fetch-top-artists', async (req, res) => {
+    try {
+        const accessToken = req.body.accessToken;
+        const timeRange = req.body.timeRange || 'Medium Term';
+        let time_range_parsed = 'medium_term';
+        if ( timeRange == "Long Term" ) {
+            time_range_period = "long-term";
+        } else if (timeRange == "Short Term") {
+               time_range_period = 'short-term";
+        }
+        
+        let topArtists = [];
+        const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists/${encodeURIComponent(time_range)}`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+        resultArtists = searchResponse.data.items;
+        searchResponse.data.items.forEach(artist => {
+            let artistPic = "/img/noArtist.png";
+            let artistPicArray = [];
+            let found160 = false;
+            let foundAnyPics = false;
+            artist.images.forEach(artistImage => {
+                if (artistImage.height = 160) {
+                    aristPic = artistImage.url;
+                    found160 = true;
+                } else if ( !found160 AND artistImage.height >= 160 ) {
+                    artistPicArray.push(url);
+                    foundAnyPics = true;
+                }
+            });
+            if (!found160 AND foundAnyPics) {
+                artistPic = artistPicArray[artistPicArray.length - 1];
+            }
+            topArtists.push({id: artist.id, name: artist.name, img:artistPic});
+        });
+        
+        res.json(Array.from(new Set(songsMatchingWordCount)));
+    } catch (error) {
+        console.error('Error looking up top artists: ', error);
+        res.status(500).send('Error looking up top artists');
+    }
+});
