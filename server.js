@@ -462,7 +462,7 @@ app.post('/fetch-top-artists', async (req, res) => {
                 'Authorization': `Bearer ${accessToken}`
             }
         });
-        resultArtists.items.forEach(artist => {
+        resultArtists.data.items.forEach(artist => {
             let artistPic = "/img/noArtist.png";
             let artistPicArray = [];
             let found160 = false;
