@@ -454,7 +454,7 @@ app.post('/fetch-top-artists', async (req, res) => {
         } else if (timeRange == "Short Term") {
                timeRangeParsed = "short_term";
         }
-        
+        console.log("Bearer token for user is "+accessToken);
         let topArtists = [];
 
         const resultArtists = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${timeRangeParsed}`, {
