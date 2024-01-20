@@ -457,21 +457,12 @@ app.post('/fetch-top-artists', async (req, res) => {
         
         let topArtists = [];
 
-        const response = await fetch('https://api.spotify.com/v1/me/top/artists?time_range=medium_term', {
-        headers: {
-          Authorization: 'Bearer ' + accessToken
-        }
+        const resultArtists = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${timeRangeParsed}`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
         });
-        console.log(response);
-        const data = await response.json();
-        resultArtists = data;
-        // const searchResponse = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${timeRangeParsed}`, {
-        //     headers: {
-        //         'Authorization': `Bearer ${accessToken}`
-        //     }
-        // });
-        // resultArtists = await searchResponse.data.items;
-        data.items.forEach(artist => {
+        resultArtists.items.forEach(artist => {
             let artistPic = "/img/noArtist.png";
             let artistPicArray = [];
             let found160 = false;
