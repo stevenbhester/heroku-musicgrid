@@ -558,3 +558,57 @@ app.post('/list-songs-by-year', async (req, res) => {
         res.status(500).send('Error during release year check');
     }
 });
+
+app.post('/list-songs-by-duration-wordcount', async (req, res) => {
+    try {
+        const artistName = req.body.artistName;
+        let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
+        let wordCounts = req.body.wordCounts || [1,2,3,4,5]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
+        let debug = false;
+        
+        const artistSearchComponent = 'artist:"' + artistName + '"';
+        let offset = 0;
+        let totalResults = 0;
+        const songsByDuration = {};
+        const songsByWordcount = {};
+        durations.forEach( duration => {
+            songsByDuration[duration] = 0;
+        });
+        wordCounts.forEach( wordCount => {
+            songsByWordcount[wordCount] = 0;
+        });
+        const accessToken = await getSpotifyAccessToken();
+
+        do {
+            const searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${encodeURIComponent(artistSearchComponent)}&type=track&market=US&offset=${offset}&limit=50`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalResults = searchResponse.data.tracks.total;
+            searchResponse.data.tracks.items.forEach(song => {
+                bannedWords.forEach(word => {
+                    if (song.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(song.name+" removed for invalid term in title.");}
+                    }
+                });
+                if(!skip) {
+                    durations.forEach(duration => {
+                        if (song.duration_ms < duration) { songsByDuration[duration] += 1;}
+                    });
+                    wordCounts.forEach(wordCount => {
+                        if (song.name.split(" ").length = wordCount) { songsByWordcount[wordCount] += 1;}
+                    });
+                }
+            });
+            offset += 50;
+        } while (offset < totalResults);
+        let songsByDurWordcount = { duration: songsByDuration, wordcount: songsByWordcount};
+        res.json(Array.from(new Set(songsByDurWordcount)));
+    } catch (error) {
+        console.error('Error during search: ', error);
+        res.status(500).send('Error during search');
+    }
+});
