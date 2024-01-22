@@ -527,7 +527,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                     'Authorization': `Bearer ${accessToken}`
                 }
             });
-            albumDetails.data.albums.items.forEach(album => {
+            albumDetails.data.albums.forEach(album => {
                 if(debug) {console.log("Checking album "+album.name);}
                 //First we check if the album contains any banned words (filtering for alternate versions and remixes)
                 let skip = false;
@@ -542,10 +542,10 @@ app.post('/list-songs-by-year', async (req, res) => {
                     let currYear = album.release_date.slice(0,4) 
                     if(currKeys.length >= 0 && currKeys.includes(currYear)) {
                         if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYear[currYear]+1));}
-                        songsByYear[currYear]+=1;
+                        songsByYear[currYear]+=album.total_tracks;
                     } else {
                         if(debug) {console.log(currYear+" added fresh to year index");}
-                        songsByYear[currYear]=1;
+                        songsByYear[currYear]=album.total_tracks;
                     }
                 }
             });
