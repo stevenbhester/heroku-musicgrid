@@ -519,7 +519,7 @@ app.post('/list-songs-by-year', async (req, res) => {
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
         for(let i = 0; i < albumArr.length; i+=20) {
-            let albumDetails = albumArr.slice(i,i+20).join(",");
+            let albumIds = albumArr.slice(i,i+20).join(",");
             const albumsDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
