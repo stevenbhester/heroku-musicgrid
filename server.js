@@ -11,7 +11,7 @@ app.use(cors({
 }));
 
 const CLIENT_ID = '1d952129111a45b2b86ea1c08dd9c6ca';  
-const CLIENT_SECRET = 'c6ddfe3768bf43e092a68bfe0e9f3e6a';  
+const CLIENT_SECRET = ${client_secret};  
 
 // PostgreSQL connection using Pool
 const pool = new Pool({
