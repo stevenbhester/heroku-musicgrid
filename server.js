@@ -499,7 +499,7 @@ app.post('/list-songs-by-year', async (req, res) => {
         let totalResults = 0;
         const songsByYear = {};
         let albumArr = [];
-        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx"]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
         const accessToken = await getSpotifyAccessToken();
 
         // Pull all albums to later pull all tracks
