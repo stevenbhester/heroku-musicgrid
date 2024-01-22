@@ -1,4 +1,23 @@
-steps:
-  - name: Secrets as variables
-    env: 
-      client_secret: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+name: Make secrets accessible to code
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Secrets
+    runs-on: ubuntu-latest
+    
+    steps:
+          - name: Git checkout
+            uses: actions/checkout@v2
+    
+          - name: Use Node 20.x
+            uses: actions/setup-node@v1
+            with:
+              node-version: 20.x
+    
+          - name: Expose secret
+            run: yarn test --ci --silent --testPathIgnorePatterns=experimental
+            env:
+              CI: true
+              CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
