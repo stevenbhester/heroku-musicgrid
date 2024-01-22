@@ -487,3 +487,53 @@ app.post('/fetch-top-artists', async (req, res) => {
         res.status(500).send('Error looking up top artists');
     }
 });
+
+app.post('/list-songs-by-year', async (req, res) => {
+    try {
+        const artistName = req.body.artistName;
+        let debug = true;
+        
+        const artistSearchComponent = 'artist:' + artistName;
+        let offset = 0;
+        let totalResults = 0;
+        const songsByYear = {};
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx"]
+        const accessToken = await getSpotifyAccessToken();
+
+        do {
+            const searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${encodeURIComponent(artistSearchComponent)}&type=track&market=US&offset=${offset}&limit=50`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalResults = searchResponse.data.tracks.total;
+            searchResponse.data.tracks.items.forEach(song => {
+                if(debug) {console.log("Checking song "+song.name);}
+                //First we check if the track contains any banned words (filtering for alternate versions and remixes)
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (song.name.toLowerCase().includes(lower(word.toLowerCase()))) {
+                        skip = true;
+                    if(debug) {console.log(song.name+" removed for invalid term in title.");}
+                    }
+                }
+                if (!skip) {
+                    let currKeys = Object.keys(songsByYear);
+                    let currYear = song.album.release_date.slice(0,4) 
+                    if(currKeys.length >= 0 AND currYear in currKeys) {
+                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYear[currYear]+1));}
+                        songsByYear[currYear]+=1;
+                    } else {
+                        if(debug) {console.log(currYear+" added fresh to year index");}
+                        songsByYear[currYear]=1;
+                    }
+                }
+            });
+            offset += 50;
+        } while (offset < totalResults);
+        res.json(songsByYear);
+    } catch (error) {
+        console.error('Error during release year check: ', error);
+        res.status(500).send('Error during release year check');
+    }
+});
