@@ -516,7 +516,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                         skip = true;
                     if(debug) {console.log(song.name+" removed for invalid term in title.");}
                     }
-                }
+                });
                 if (!skip) {
                     let currKeys = Object.keys(songsByYear);
                     let currYear = song.album.release_date.slice(0,4) 
