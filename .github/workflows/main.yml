@@ -1,0 +1,4 @@
+steps:
+  - name: Secrets as variables
+    env: 
+      client_secret: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
