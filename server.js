@@ -515,11 +515,13 @@ app.post('/list-songs-by-year', async (req, res) => {
             });
             albumOffset += 50;
         } while (albumOffset < totalAlbums);
+        if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
         for(let i = 0; i < albumArr.length; i+=20) {
             let albumIds = albumArr.slice(i,i+20).join(",");
+            if(debug) {console.log(`Searching albums https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`);}
             const albumDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
