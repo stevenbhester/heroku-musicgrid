@@ -316,7 +316,7 @@ app.post('/list-songs-by-duration', async (req, res) => {
         let maxDuration = req.body.maxDurationMs || 1800000; // Default max duration
         let minDuration = req.body.minDurationMs || 0;      // Default min duration
 
-        const artistSearchComponent = 'artist:' + artistName;
+        const artistSearchComponent = 'artist:"' + artistName + '"';
         let offset = 0;
         let totalResults = 0;
         const songsMatchingDuration = [];
@@ -362,7 +362,7 @@ app.post('/list-songs-by-dates', async (req, res) => {
         let startYear = req.body.startYear || 1450; 
         let endYear = req.body.endYear || 2050;   
 
-        const artistSearchComponent = 'artist:' + artistName;
+        const artistSearchComponent = 'artist:"' + artistName + '"';
         const yearSearchComponent = 'year:'+startYear+'-'+endYear+' ';
         let offset = 0;
         let totalResults = 0;
@@ -493,7 +493,7 @@ app.post('/list-songs-by-year', async (req, res) => {
         const artistName = req.body.artistName;
         let debug = true;
         
-        const artistSearchComponent = 'artist:' + artistName;
+        const artistSearchComponent = 'artist:"' + artistName = '"';
         let offset = 0;
         let totalResults = 0;
         const songsByYear = {};
