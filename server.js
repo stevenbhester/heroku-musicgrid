@@ -520,7 +520,6 @@ app.post('/list-songs-by-year', async (req, res) => {
         // We can search up to 20 albums at once
         for(let i = 0; i < albumArr.length; i+=20) {
             let albumDetails = albumArr.slice(i,i+20).join(",");
-            https://api.spotify.com/v1/albums?ids=382ObEPsp2rxGrnsizN5TX%2C1A2GTWGtFfWp7KSQTwWOyo%2C2noRn2Aes5aoNVsU6iWThc&market=US
             const albumsDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
@@ -548,6 +547,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                     songsByYear[currYear]=1;
                 }
             }
+        });
         res.json(songsByYear);
     } catch (error) {
         console.error('Error during release year check: ', error);
