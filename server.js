@@ -406,7 +406,7 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
         const artistName = req.body.artistName;
         let wordCount = req.body.wordCount || 1; 
 
-        const artistSearchComponent = 'artist:' + artistName;
+        const artistSearchComponent = 'artist:"' + artistName + '"';
         let offset = 0;
         let totalResults = 0;
         const songsMatchingWordCount = [];
