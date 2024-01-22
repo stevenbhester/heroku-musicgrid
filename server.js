@@ -512,7 +512,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                 //First we check if the track contains any banned words (filtering for alternate versions and remixes)
                 let skip = false;
                 bannedWords.forEach(word => {
-                    if (song.name.toLowerCase().includes(lower(word.toLowerCase()))) {
+                    if (song.name.toLowerCase().includes(word.toLowerCase())) {
                         skip = true;
                     if(debug) {console.log(song.name+" removed for invalid term in title.");}
                     }
