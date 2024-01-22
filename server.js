@@ -315,7 +315,8 @@ app.post('/list-songs-by-duration', async (req, res) => {
         const artistName = req.body.artistName;
         let maxDuration = req.body.maxDurationMs || 1800000; // Default max duration
         let minDuration = req.body.minDurationMs || 0;      // Default min duration
-
+        let debug = false;
+        
         const artistSearchComponent = 'artist:"' + artistName + '"';
         let offset = 0;
         let totalResults = 0;
@@ -335,11 +336,11 @@ app.post('/list-songs-by-duration', async (req, res) => {
                 if (song.duration_ms < maxDuration && song.duration_ms > minDuration) {
                     durationMatch = true;
                     let durationMinutes = Math.round(song.duration_ms/6000,1)/10
-                    console.log(`Duration matched for song "${song.name}" of dur ${durationMinutes} minutes (${maxDuration} > ${song.duration_ms} ms > ${minDuration})`);
+                    if(debug) {console.log(`Duration matched for song "${song.name}" of dur ${durationMinutes} minutes (${maxDuration} > ${song.duration_ms} ms > ${minDuration})`)};
                     song.artists.forEach(artist => {
                         if(artist.name.toLowerCase().trim() == artistName.toLowerCase().trim()) {
                             artistMatch = true;
-                            console.log(`Artist "${artist}" matched`);
+                            if(debug) {console.log(`Artist "${artist}" matched`)};
                         }
                     });
                     if(durationMatch && artistMatch) {
@@ -448,12 +449,13 @@ app.post('/fetch-top-artists', async (req, res) => {
         const accessToken = req.body.accessToken;
         const timeRange = req.body.timeRange || 'Medium Term';
         let timeRangeParsed = 'medium_term';
+        let debug = true;
         if ( timeRange == "Long Term" ) {
             timeRangeParsed = "long_term";
         } else if (timeRange == "Short Term") {
                timeRangeParsed = "short_term";
         }
-        console.log("Bearer token for user is "+accessToken);
+        if(debug) {console.log("Bearer token for user is "+accessToken)};
         let topArtists = [];
 
         const resultArtists = await axios.get(`https://api.spotify.com/v1/me/top/artists?time_range=${timeRangeParsed}`, {
