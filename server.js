@@ -493,7 +493,7 @@ app.post('/list-songs-by-year', async (req, res) => {
         const artistName = req.body.artistName;
         let debug = true;
         
-        const artistSearchComponent = 'artist:"' + artistName = '"';
+        const artistSearchComponent = 'artist:"' + artistName + '"';
         let offset = 0;
         let totalResults = 0;
         const songsByYear = {};
