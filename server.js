@@ -492,7 +492,7 @@ app.post('/list-songs-by-year', async (req, res) => {
     try {
         const artistId = req.body.artistId;
         let searchGroups = "single,album";
-        let debug = false;
+        let debug = true;
         
         let offset = 0;
         let albumOffset = 0;
