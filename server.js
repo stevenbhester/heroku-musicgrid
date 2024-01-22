@@ -10,8 +10,8 @@ app.use(cors({
     origin: 'https://musicgrid.erincullison.com'
 }));
 
-const CLIENT_ID = '1d952129111a45b2b86ea1c08dd9c6ca';  
-const CLIENT_SECRET = ${client_secret};  
+const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;  
+const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;  
 
 // PostgreSQL connection using Pool
 const pool = new Pool({
