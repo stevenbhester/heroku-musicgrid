@@ -701,7 +701,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         }
 
         async function albumTrackPull(albumId) {
-            console.log("Fetching /albums/albumid/tracks for artist "+artistId" album "+albumId);
+            console.log("Fetching /albums/albumid/tracks for artist "+artistId+" album "+albumId);
             const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
