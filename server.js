@@ -592,23 +592,6 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
             });
             totalAlbums = albumList.data.total;
             albumList.data.items.forEach(album => {
-                albumArr.push(album.id);
-            });
-            albumOffset += 50;
-        } while (albumOffset < totalAlbums);
-        if(debug) {console.log(`Album list at: ${albumArr}`);}
-
-        // Now count releases by year for each response date
-        // We can search up to 20 albums at once
-        for(let i = 0; i < albumArr.length; i+=20) {
-            let albumIds = albumArr.slice(i,i+20).join(",");
-            if(debug) {console.log(`Searching albums https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`);}
-            const albumDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
-            albumDetails.data.albums.forEach(album => {
                 if(debug) {console.log("Checking album "+album.name);}
                 //First we check if the album contains any banned words (filtering for alternate versions and remixes)
                 let skip = false;
@@ -618,37 +601,43 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                         if(debug) {console.log(album.name+" removed for invalid term in title.");}
                     }
                 });
-                if (!skip) {
-                    let tracksOffset = 0;
-                    let totalAlbumTracks = 0;
-                    do {
-                        const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(album.Id)}/albums/tracks?market=US&limit=50&offset=${tracksOffset}`, {
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`
-                            }
-                        });
-                        totalAlbumTracks = albumTrackList.data.total;
-                        albumTrackList.data.items.forEach(albumTrack => {
-                            let skip = false;
-                            bannedWords.forEach(word => {
-                                if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
-                                    skip = true;
-                                    if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
-                                }
-                            });
-                            if(!skip) {
-                                durations.forEach(duration => {
-                                    if (albumTrack.duration_ms < duration) { songsByDuration[duration] += 1;}
-                                });
-                                wordCounts.forEach(wordCount => {
-                                    if (albumTrack.name.split(" ").length = wordCount) { songsByWordcount[wordCount] += 1;}
-                                });
-                        });
-                        tracksOffset += 50;
-                    } while (tracksOffset < totalAlbumTracks);
+                if(!skip) {
+                    albumArr.push(album.id);
                 }
             });
-        }
+            albumOffset += 50;
+        } while (albumOffset < totalAlbums);
+        if(debug) {console.log(`Album list at: ${albumArr}`);}
+
+        // Now count releases by year for each response date
+        // We can search up to 20 albums at once
+        let tracksOffset = 0;
+        let totalAlbumTracks = 0;
+        do {
+            const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(album.Id)}/albums/tracks?market=US&limit=50&offset=${tracksOffset}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalAlbumTracks = albumTrackList.data.total;
+            albumTrackList.data.items.forEach(albumTrack => {
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
+                    }
+                });
+                if(!skip) {
+                    durations.forEach(duration => {
+                        if (albumTrack.duration_ms < duration) { songsByDuration[duration] += 1;}
+                    });
+                    wordCounts.forEach(wordCount => {
+                        if (albumTrack.name.split(" ").length = wordCount) { songsByWordcount[wordCount] += 1;}
+                    });
+            });
+            tracksOffset += 50;
+        } while (tracksOffset < totalAlbumTracks);
         let songsByDurWordcount = { duration: songsByDuration, wordcount: songsByWordcount};
         res.json(songsByDurWordcount);
     } catch (error) {
