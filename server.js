@@ -646,7 +646,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                         lowestDurationFound = false;
                         wordCountFound = false;
                         durations.forEach(duration => {
-                            if (!lowestDurationFound && (duration = durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
+                            if (!lowestDurationFound && (duration == durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
                                 songsByDurationSumm[duration] += 1;
                                 songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
                                 lowestDurationFound = true;
