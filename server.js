@@ -641,7 +641,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                     }
                 });
             } 
-        });
+        }
         let songsByDurWordcount = { duration: songsByDuration, wordcount: songsByWordcount};
         res.json(songsByDurWordcount);
     } catch (error) {
