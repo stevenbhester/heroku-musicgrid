@@ -588,6 +588,7 @@ app.post('/list-songs-by-duration-wordcount', async (req, res) => {
             });
             totalResults = searchResponse.data.tracks.total;
             searchResponse.data.tracks.items.forEach(song => {
+                let skip = false;
                 bannedWords.forEach(word => {
                     if (song.name.toLowerCase().includes(word.toLowerCase())) {
                         skip = true;
