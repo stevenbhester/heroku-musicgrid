@@ -546,14 +546,14 @@ app.post('/list-songs-by-year', async (req, res) => {
                     if(currKeys.length >= 0 && currKeys.includes(currYear)) {
                         if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYearSumm[currYear]+album.total_tracks));}
                         songsByYearSumm[currYear]+=album.total_tracks;
-                        album.tracks.forEach(albumTrack => {
+                        album.tracks.items.forEach(albumTrack => {
                             songsByYearDetails[currYear].push({id:track.id, name:track.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
                         });
                     } else {
                         if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
                         songsByYearSumm[currYear]=album.total_tracks;
                         songsByYearDetails[currYear] = [];
-                        album.tracks.forEach(albumTrack => {
+                        album.tracks.items.forEach(albumTrack => {
                             songsByYearDetails[currYear].push({id:track.id, name:track.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
                         });
                     }
