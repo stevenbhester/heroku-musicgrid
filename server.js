@@ -649,8 +649,6 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         });
         const accessToken = await getSpotifyAccessToken();
 
-        // Pull all albums to later pull all tracks
-        totalAlbums = await albumPull();
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         console.log("Fetching /artists/artistId/albums for "+artistId);
