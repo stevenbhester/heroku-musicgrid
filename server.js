@@ -607,7 +607,7 @@ app.post('/list-songs-by-duration-wordcount', async (req, res) => {
             offset += 50;
         } while (offset < totalResults);
         let songsByDurWordcount = { duration: songsByDuration, wordcount: songsByWordcount};
-        res.json(Array.from(new Set(songsByDurWordcount)));
+        res.json(songsByDurWordcount);
     } catch (error) {
         console.error('Error during search: ', error);
         res.status(500).send('Error during search');
