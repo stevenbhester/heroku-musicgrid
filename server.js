@@ -573,7 +573,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
             await albumDeepPull(j);
         }
 
-        function async albumDeepPull(j) {
+        async function albumDeepPull(j) {
             setTimeout(async function() {
                 let tracksOffset = 0;
                 let totalAlbumTracks = 1;
@@ -584,7 +584,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
             }, j*2500);
         }
 
-        function async albumTrackPull(trackOffset) {
+        async function albumTrackPull(trackOffset) {
             setTimeout(async function() {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
