@@ -570,7 +570,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
         const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
         let debug = true;
         
-        let offset = 0;
+        let albumOffset = 0;
         let totalResults = 0;
         const songsByDuration = {};
         const songsByWordcount = {};
@@ -586,7 +586,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
 
         // Pull all albums to later pull all tracks
          do {
-            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&offset=${albumOffset}`, {
+            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${offset}`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
                 }
@@ -616,7 +616,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
             let tracksOffset = 0;
             let totalAlbumTracks = 1;
             let albumId = albumArr[j];
-            for(let k = 0; k<totalAlbumTracks; k+=50) {
+            for(let tracksOffset = 0; tracksOffset<totalAlbumTracks; tracksOffset+=50) {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/albums/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`
