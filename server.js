@@ -500,6 +500,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
         let debug = true;
         
         let albumOffset = 0;
+        let trackOffset = 0;
         let totalResults = 0;
         const songsByDurationSumm = {};
         const songsByWordcountSumm = {};
@@ -520,71 +521,56 @@ app.post('/rich-artist-lookup', async (req, res) => {
         const accessToken = await getSpotifyAccessToken();
 
         // Pull all albums to later pull all tracks
-         do {
-            await albumPull(albumOffset);
-            albumOffset += 50;
-        } while (albumOffset < totalAlbums);
+        await albumPull();
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         async function albumPull(albumOffset) {
-            setTimeout(async function(){
-                const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`
+            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalAlbums = albumList.data.total;
+            albumList.data.items.forEach(album => {
+                if(debug) {console.log("Checking album "+album.name);}
+                //First we check if the album contains any banned words (filtering for alternate versions and remixes)
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (album.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(album.name+" removed for invalid term in title.");}
                     }
                 });
-                totalAlbums = albumList.data.total;
-                albumList.data.items.forEach(album => {
-                    if(debug) {console.log("Checking album "+album.name);}
-                    //First we check if the album contains any banned words (filtering for alternate versions and remixes)
-                    let skip = false;
-                    bannedWords.forEach(word => {
-                        if (album.name.toLowerCase().includes(word.toLowerCase())) {
-                            skip = true;
-                            if(debug) {console.log(album.name+" removed for invalid term in title.");}
-                        }
-                    });
-                    if(!skip) {
-                        albumArr.push(album.id);
-                        let currKeys = Object.keys(songsByReleaseDateSumm);
-                        let currYear = album.release_date.slice(0,4) 
-                        if(currKeys.length >= 0 && currKeys.includes(currYear)) {
-                            if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
-                            songsByReleaseDateSumm[currYear]+=album.total_tracks;
-                            // album.tracks.items.forEach(albumTrack => {
-                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            // });
-                        } else {
-                            if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
-                            songsByReleaseDateSumm[currYear]=album.total_tracks;
-                            songsByReleaseDateDetails[currYear] = [];
-                            // album.tracks.items.forEach(albumTrack => {
-                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            // });
-                        }
+                if(!skip) {
+                    albumArr.push(album.id);
+                    let currKeys = Object.keys(songsByReleaseDateSumm);
+                    let currYear = album.release_date.slice(0,4) 
+                    if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
+                        songsByReleaseDateSumm[currYear]+=album.total_tracks;
+                        // album.tracks.items.forEach(albumTrack => {
+                        //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        // });
+                    } else {
+                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
+                        songsByReleaseDateSumm[currYear]=album.total_tracks;
+                        songsByReleaseDateDetails[currYear] = [];
+                        // album.tracks.items.forEach(albumTrack => {
+                        //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        // });
                     }
-                });
-            }, 50*albumOffset);
+                }
+            });
         }
         
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
-        for(let j = 0; j < albumArr.length; j+=1) {
-            await albumDeepPull(j);
+        for(let j = 0; j < albumArr.length; j+=1) {   
+            let albumId = albumArr[j];
+            await albumTrackPull(albumId);
         }
 
-        async function albumDeepPull(j) {
-            setTimeout(async function() {
-                let tracksOffset = 0;
-                let totalAlbumTracks = 1;
-                let albumId = albumArr[j];
-                for(let tracksOffset = 0; tracksOffset<totalAlbumTracks; tracksOffset+=50) {
-                    await albumTrackPull(trackOffset);
-                } 
-            }, j*2500);
-        }
-
-        async function albumTrackPull(trackOffset) {
+        async function albumTrackPull(albumId) {
             setTimeout(async function() {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
@@ -642,6 +628,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         let debug = true;
         
         let albumOffset = 0;
+        let tracksOffset = 0;
         let totalResults = 0;
         let totalAlbums = 1;
         const songsByDurationSumm = {};
@@ -663,72 +650,56 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         const accessToken = await getSpotifyAccessToken();
 
         // Pull all albums to later pull all tracks
-         do {
-            totalAlbums = await albumPull(albumOffset);
-            albumOffset += 50;
-        } while (albumOffset < totalAlbums);
+        totalAlbums = await albumPull();
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
-        async function albumPull(albumOffset) {
-            setTimeout(async function(){
-                const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`
+        async function albumPull() {
+            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalAlbums = albumList.data.total;
+            albumList.data.items.forEach(album => {
+                if(debug) {console.log("Checking album "+album.name);}
+                //First we check if the album contains any banned words (filtering for alternate versions and remixes)
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (album.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(album.name+" removed for invalid term in title.");}
                     }
                 });
-                totalAlbums = albumList.data.total;
-                albumList.data.items.forEach(album => {
-                    if(debug) {console.log("Checking album "+album.name);}
-                    //First we check if the album contains any banned words (filtering for alternate versions and remixes)
-                    let skip = false;
-                    bannedWords.forEach(word => {
-                        if (album.name.toLowerCase().includes(word.toLowerCase())) {
-                            skip = true;
-                            if(debug) {console.log(album.name+" removed for invalid term in title.");}
-                        }
-                    });
-                    if(!skip) {
-                        let currKeys = Object.keys(songsByReleaseDateSumm);
-                        let currYear = album.release_date.slice(0,4); 
-                        albumsObj[album.id] = currYear;
-                        if(currKeys.length >= 0 && currKeys.includes(currYear)) {
-                            if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
-                            songsByReleaseDateSumm[currYear]+=album.total_tracks;
-                            // album.tracks.items.forEach(albumTrack => {
-                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            // });
-                        } else {
-                            if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
-                            songsByReleaseDateSumm[currYear]=album.total_tracks;
-                            songsByReleaseDateDetails[currYear] = [];
-                            // album.tracks.items.forEach(albumTrack => {
-                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            // });
-                        }
+                if(!skip) {
+                    let currKeys = Object.keys(songsByReleaseDateSumm);
+                    let currYear = album.release_date.slice(0,4); 
+                    albumsObj[album.id] = currYear;
+                    if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
+                        songsByReleaseDateSumm[currYear]+=album.total_tracks;
+                        // album.tracks.items.forEach(albumTrack => {
+                        //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        // });
+                    } else {
+                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
+                        songsByReleaseDateSumm[currYear]=album.total_tracks;
+                        songsByReleaseDateDetails[currYear] = [];
+                        // album.tracks.items.forEach(albumTrack => {
+                        //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        // });
                     }
-                });
-                return totalAlbums;
-            }, 50*albumOffset);
+                }
+            });
         }
         
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
         let albumArr = Object.Keys(albumsObj);
         for(let j = 0; j < albumArr.length; j+=1) {
-            await albumDeepPull(j, albumArr[j]);
-        }
-        
-        async function albumDeepPull(j, albumId) {
-            setTimeout(async function() {
-                let tracksOffset = 0;
-                let totalAlbumTracks = 1;
-                for(let tracksOffset = 0; tracksOffset<totalAlbumTracks; tracksOffset+=50) {
-                    totalAlbumTracks = await albumTrackPull(trackOffset, albumId);
-                } 
-            }, j*2500);
+            await albumTrackPull(albumArr[j]); 
         }
 
-        async function albumTrackPull(trackOffset, albumId) {
+        async function albumTrackPull(albumId) {
             setTimeout(async function() {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
