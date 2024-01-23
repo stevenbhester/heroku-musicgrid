@@ -646,13 +646,13 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                         durations.forEach(duration => {
                             if (albumTrack.duration_ms < duration) { 
                                 songsByDurationSumm[duration] += 1;
-                                songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name};
+                                songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
                             }
                         });
                         wordCounts.forEach(wordCount => {
                             if (albumTrack.name.split(" ").length == wordCount) { 
                                 songsByWordcountSumm[wordCount] += 1;
-                                songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name};
+                                songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name});
                             }
                         });
                     }
