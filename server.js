@@ -543,7 +543,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                     let currKeys = Object.keys(songsByYear);
                     let currYear = album.release_date.slice(0,4) 
                     if(currKeys.length >= 0 && currKeys.includes(currYear)) {
-                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYear[currYear]+total_tracks));}
+                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYear[currYear]+album.total_tracks));}
                         songsByYear[currYear]+=album.total_tracks;
                     } else {
                         if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
