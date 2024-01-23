@@ -502,7 +502,7 @@ app.post('/list-songs-by-year', async (req, res) => {
         let totalResults = 0;
         const songsByYear = {};
         let albumArr = [];
-        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
         const accessToken = await getSpotifyAccessToken();
 
         // Pull all albums to later pull all tracks
@@ -567,7 +567,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
         let searchGroups = "single,album";
         let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
         let wordCounts = req.body.wordCounts || [1,2,3,4,5]
-        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
         let debug = true;
         
         let albumOffset = 0;
@@ -656,7 +656,7 @@ app.post('/list-songs-by-duration-wordcount', async (req, res) => {
         const artistName = req.body.artistName;
         let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
         let wordCounts = req.body.wordCounts || [1,2,3,4,5]
-        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
         let debug = true;
         
         const artistSearchComponent = 'artist:"' + artistName + '"';
