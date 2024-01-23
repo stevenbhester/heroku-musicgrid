@@ -630,3 +630,157 @@ app.post('/rich-artist-lookup', async (req, res) => {
         res.status(500).send('Error during search');
     }
 });
+
+
+app.post('/rich-artist-lookup-v2', async (req, res) => {
+    try {
+        const artistId = req.body.artistId;
+        let searchGroups = "single,album";
+        let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000, 360000]; // Default max duration
+        let wordCounts = req.body.wordCounts || [1,2,3,4,5]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
+        let debug = true;
+        
+        let albumOffset = 0;
+        let totalResults = 0;
+        const songsByDurationSumm = {};
+        const songsByWordcountSumm = {};
+        const songsByDurationDetails = {};
+        const songsByWordcountDetails = {};
+        const songsByReleaseDateSumm = {};
+        const songsByReleaseDateDetails = {};
+        let albumsObj = {};
+        let tracksArr = [];
+        durations.forEach( duration => {
+            songsByDurationSumm[duration] = 0;
+            songsByDurationDetails[duration] = [];
+        });
+        wordCounts.forEach( wordCount => {
+            songsByWordcountSumm[wordCount] = 0;
+            songsByWordcountDetails[wordCount] = [];
+        });
+        const accessToken = await getSpotifyAccessToken();
+
+        // Pull all albums to later pull all tracks
+         do {
+            await albumPull(albumOffset);
+            albumOffset += 50;
+        } while (albumOffset < totalAlbums);
+        if(debug) {console.log(`Album list at: ${albumArr}`);}
+
+        async function albumPull(albumOffset) {
+            setTimeout(async function(){
+                const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                totalAlbums = albumList.data.total;
+                albumList.data.items.forEach(album => {
+                    if(debug) {console.log("Checking album "+album.name);}
+                    //First we check if the album contains any banned words (filtering for alternate versions and remixes)
+                    let skip = false;
+                    bannedWords.forEach(word => {
+                        if (album.name.toLowerCase().includes(word.toLowerCase())) {
+                            skip = true;
+                            if(debug) {console.log(album.name+" removed for invalid term in title.");}
+                        }
+                    });
+                    if(!skip) {
+                        let currKeys = Object.keys(songsByReleaseDateSumm);
+                        let currYear = album.release_date.slice(0,4); 
+                        albumsObj[album.id] = currYear;
+                        if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                            if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
+                            songsByReleaseDateSumm[currYear]+=album.total_tracks;
+                            // album.tracks.items.forEach(albumTrack => {
+                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                            // });
+                        } else {
+                            if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
+                            songsByReleaseDateSumm[currYear]=album.total_tracks;
+                            songsByReleaseDateDetails[currYear] = [];
+                            // album.tracks.items.forEach(albumTrack => {
+                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                            // });
+                        }
+                    }
+                });
+            }, 50*albumOffset);
+        }
+        
+        // Now count releases by year for each response date
+        // We can search up to 20 albums at once
+        let albumArr = Object.Keys(albumsObj);
+        for(let j = 0; j < albumArr.length; j+=1) {
+            await albumDeepPull(j, albumArr[j]);
+        }
+        
+        async function albumDeepPull(j, albumId) {
+            setTimeout(async function() {
+                let tracksOffset = 0;
+                let totalAlbumTracks = 1;
+                for(let tracksOffset = 0; tracksOffset<totalAlbumTracks; tracksOffset+=50) {
+                    totalAlbumTracks = await albumTrackPull(trackOffset, albumId);
+                } 
+            }, j*2500);
+        }
+
+        async function albumTrackPull(trackOffset, albumId) {
+            setTimeout(async function() {
+                const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                totalAlbumTracks = albumTrackList.data.total;
+                albumTrackList.data.items.forEach(albumTrack => {
+                    let skip = false;
+                    bannedWords.forEach(word => {
+                        if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
+                            skip = true;
+                            if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
+                        }
+                    });
+                    if(!skip) {
+                        lowestDurationFound = false;
+                        wordCountFound = false;
+                        let currKeys = Object.keys(songsByReleaseDateSumm);
+                        let currYear = albumsObj[albumId];
+                        
+                        durations.forEach(duration => {
+                            if (!lowestDurationFound && (duration == durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
+                                songsByDurationSumm[duration] += 1;
+                                songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
+                                lowestDurationFound = true;
+                            }
+                        });
+                        
+                        wordCounts.forEach(wordCount => {
+                            if (!wordCountFound && albumTrack.name.split(" ").length == wordCount) { 
+                                songsByWordcountSumm[wordCount] += 1;
+                                songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name});
+                                wordCountFound = true;
+                            }
+                        });
+                        
+                        if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        } else {
+                            songsByReleaseDateDetails[currYear] = [];
+                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        }
+                    }
+                });
+                return totalAlbumTracks;
+            }, 50*trackOffset);
+        }
+            
+        let songSummary = { duration: songsByDurationSumm, wordcount: songsByWordcountSumm, releasedate: songsByReleaseDateSumm }
+        let songDetails = { duration: songsByDurationDetails, wordcount: songsByWordcountDetails, releasedate: songsByReleaseDateDetails }
+        res.json({summary: songSummary, details: songDetails});
+    } catch (error) {
+        console.error('Error during search: ', error);
+        res.status(500).send('Error during search');
+    }
+});
