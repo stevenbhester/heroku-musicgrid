@@ -643,6 +643,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         
         let albumOffset = 0;
         let totalResults = 0;
+        let totalAlbums = 1;
         const songsByDurationSumm = {};
         const songsByWordcountSumm = {};
         const songsByDurationDetails = {};
@@ -663,7 +664,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
 
         // Pull all albums to later pull all tracks
          do {
-            await albumPull(albumOffset);
+            totalAlbums = await albumPull(albumOffset);
             albumOffset += 50;
         } while (albumOffset < totalAlbums);
         if(debug) {console.log(`Album list at: ${albumArr}`);}
@@ -706,6 +707,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
                         }
                     }
                 });
+                return totalAlbums;
             }, 50*albumOffset);
         }
         
