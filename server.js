@@ -636,6 +636,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                     wordCounts.forEach(wordCount => {
                         if (albumTrack.name.split(" ").length = wordCount) { songsByWordcount[wordCount] += 1;}
                     });
+                }
             });
             tracksOffset += 50;
         } while (tracksOffset < totalAlbumTracks);
