@@ -518,7 +518,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
             songsByWordcountSumm[wordCount] = 0;
             songsByWordcountDetails[wordCount] = [];
         });
-        const accessToken = await getSpotifyAccessToken();
+        const accessToken2 = await getSpotifyAccessToken();
 
         // Pull all albums to later pull all tracks
         await albumPull();
@@ -527,7 +527,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
         async function albumPull(albumOffset) {
             const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
                 headers: {
-                    'Authorization': `Bearer ${accessToken}`
+                    'Authorization': `Bearer ${accessToken2}`
                 }
             });
             totalAlbums = albumList.data.total;
@@ -748,7 +748,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         let songDetails = { duration: songsByDurationDetails, wordcount: songsByWordcountDetails, releasedate: songsByReleaseDateDetails }
         res.json({summary: songSummary, details: songDetails});
     } catch (error) {
-        console.error('Error during search: ');
+        console.error('~~~~~Error during search: '+error);
         res.status(500).send('Error during search');
     }
 });
