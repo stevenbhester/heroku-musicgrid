@@ -572,7 +572,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
     try {
         const artistId = req.body.artistId;
         let searchGroups = "single,album";
-        let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
+        let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000, 360000]; // Default max duration
         let wordCounts = req.body.wordCounts || [1,2,3,4,5]
         const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
         let debug = true;
@@ -643,16 +643,20 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                         }
                     });
                     if(!skip) {
+                        lowestDurationFound = false;
+                        wordCountFound = false;
                         durations.forEach(duration => {
-                            if (albumTrack.duration_ms < duration) { 
+                            if (!lowestDurationFound && (duration = durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
                                 songsByDurationSumm[duration] += 1;
                                 songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
+                                lowestDurationFound = true;
                             }
                         });
                         wordCounts.forEach(wordCount => {
-                            if (albumTrack.name.split(" ").length == wordCount) { 
+                            if (!wordCountFound && albumTrack.name.split(" ").length == wordCount) { 
                                 songsByWordcountSumm[wordCount] += 1;
                                 songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name});
+                                wordCountFound = true;
                             }
                         });
                     }
@@ -667,3 +671,4 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
         res.status(500).send('Error during search');
     }
 });
+
