@@ -700,53 +700,50 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         }
 
         async function albumTrackPull(albumId) {
-            setTimeout(async function() {
-                const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`
+            const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalAlbumTracks = albumTrackList.data.total;
+            albumTrackList.data.items.forEach(albumTrack => {
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
                     }
                 });
-                totalAlbumTracks = albumTrackList.data.total;
-                albumTrackList.data.items.forEach(albumTrack => {
-                    let skip = false;
-                    bannedWords.forEach(word => {
-                        if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
-                            skip = true;
-                            if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
+                if(!skip) {
+                    lowestDurationFound = false;
+                    wordCountFound = false;
+                    let currKeys = Object.keys(songsByReleaseDateSumm);
+                    let currYear = albumsObj[albumId];
+                    
+                    durations.forEach(duration => {
+                        if (!lowestDurationFound && (duration == durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
+                            songsByDurationSumm[duration] += 1;
+                            songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
+                            lowestDurationFound = true;
                         }
                     });
-                    if(!skip) {
-                        lowestDurationFound = false;
-                        wordCountFound = false;
-                        let currKeys = Object.keys(songsByReleaseDateSumm);
-                        let currYear = albumsObj[albumId];
-                        
-                        durations.forEach(duration => {
-                            if (!lowestDurationFound && (duration == durations[durations.length-1] || albumTrack.duration_ms < duration)) { 
-                                songsByDurationSumm[duration] += 1;
-                                songsByDurationDetails[duration].push({id: albumTrack.id, name: albumTrack.name});
-                                lowestDurationFound = true;
-                            }
-                        });
-                        
-                        wordCounts.forEach(wordCount => {
-                            if (!wordCountFound && albumTrack.name.split(" ").length == wordCount) { 
-                                songsByWordcountSumm[wordCount] += 1;
-                                songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name});
-                                wordCountFound = true;
-                            }
-                        });
-                        
-                        if(currKeys.length >= 0 && currKeys.includes(currYear)) {
-                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                        } else {
-                            songsByReleaseDateDetails[currYear] = [];
-                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                    
+                    wordCounts.forEach(wordCount => {
+                        if (!wordCountFound && albumTrack.name.split(" ").length == wordCount) { 
+                            songsByWordcountSumm[wordCount] += 1;
+                            songsByWordcountDetails[wordCount].push({id: albumTrack.id, name: albumTrack.name});
+                            wordCountFound = true;
                         }
+                    });
+                    
+                    if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                            songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                    } else {
+                        songsByReleaseDateDetails[currYear] = [];
+                            songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
                     }
-                });
-                return totalAlbumTracks;
-            }, 50*trackOffset);
+                }
+            });
         }
             
         let songSummary = { duration: songsByDurationSumm, wordcount: songsByWordcountSumm, releasedate: songsByReleaseDateSumm }
