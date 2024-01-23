@@ -654,6 +654,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         async function albumPull() {
+            console.log("Fetching /artists/artistId/albums for "+artistId;
             const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
@@ -700,6 +701,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         }
 
         async function albumTrackPull(albumId) {
+            console.log("Fetching /albums/albumid/tracks for artist "+artistId" album "+albumId;
             const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
