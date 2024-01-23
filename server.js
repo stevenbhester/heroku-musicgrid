@@ -546,7 +546,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                         if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYear[currYear]+total_tracks));}
                         songsByYear[currYear]+=album.total_tracks;
                     } else {
-                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks" tracks");}
+                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
                         songsByYear[currYear]=album.total_tracks;
                     }
                 }
