@@ -565,7 +565,7 @@ app.post('/list-songs-by-duration-wordcount', async (req, res) => {
         let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
         let wordCounts = req.body.wordCounts || [1,2,3,4,5]
         const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
-        let debug = false;
+        let debug = true;
         
         const artistSearchComponent = 'artist:"' + artistName + '"';
         let offset = 0;
