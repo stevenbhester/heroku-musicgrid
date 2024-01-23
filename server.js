@@ -560,7 +560,7 @@ app.post('/list-songs-by-year', async (req, res) => {
                 }
             });
         }
-        res.json({summary: songsByYearSumm, details: songsByYearDetails);
+        res.json({summary: songsByYearSumm, details: songsByYearDetails});
     } catch (error) {
         console.error('Error during release year check: ', error);
         res.status(500).send('Error during release year check');
