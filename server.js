@@ -551,16 +551,16 @@ app.post('/rich-artist-lookup', async (req, res) => {
                         if(currKeys.length >= 0 && currKeys.includes(currYear)) {
                             if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
                             songsByReleaseDateSumm[currYear]+=album.total_tracks;
-                            album.tracks.items.forEach(albumTrack => {
-                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            });
+                            // album.tracks.items.forEach(albumTrack => {
+                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                            // });
                         } else {
                             if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
                             songsByReleaseDateSumm[currYear]=album.total_tracks;
                             songsByReleaseDateDetails[currYear] = [];
-                            album.tracks.items.forEach(albumTrack => {
-                                songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                            });
+                            // album.tracks.items.forEach(albumTrack => {
+                            //     songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                            // });
                         }
                     }
                 });
