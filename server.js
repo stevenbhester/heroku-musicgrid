@@ -559,6 +559,105 @@ app.post('/list-songs-by-year', async (req, res) => {
     }
 });
 
+
+app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
+    try {
+        const artistId = req.body.artistId;
+        let searchGroups = "single,album";
+        let durations = req.body.durations || [60000, 120000, 180000, 240000, 300000]; // Default max duration
+        let wordCounts = req.body.wordCounts || [1,2,3,4,5]
+        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe"]
+        let debug = true;
+        
+        let offset = 0;
+        let totalResults = 0;
+        const songsByDuration = {};
+        const songsByWordcount = {};
+        let albumArr = [];
+        let tracksArr = [];
+        durations.forEach( duration => {
+            songsByDuration[duration] = 0;
+        });
+        wordCounts.forEach( wordCount => {
+            songsByWordcount[wordCount] = 0;
+        });
+        const accessToken = await getSpotifyAccessToken();
+
+        // Pull all albums to later pull all tracks
+         do {
+            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&offset=${albumOffset}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            totalAlbums = albumList.data.total;
+            albumList.data.items.forEach(album => {
+                albumArr.push(album.id);
+            });
+            albumOffset += 50;
+        } while (albumOffset < totalAlbums);
+        if(debug) {console.log(`Album list at: ${albumArr}`);}
+
+        // Now count releases by year for each response date
+        // We can search up to 20 albums at once
+        for(let i = 0; i < albumArr.length; i+=20) {
+            let albumIds = albumArr.slice(i,i+20).join(",");
+            if(debug) {console.log(`Searching albums https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`);}
+            const albumDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            albumDetails.data.albums.forEach(album => {
+                if(debug) {console.log("Checking album "+album.name);}
+                //First we check if the album contains any banned words (filtering for alternate versions and remixes)
+                let skip = false;
+                bannedWords.forEach(word => {
+                    if (album.name.toLowerCase().includes(word.toLowerCase())) {
+                        skip = true;
+                        if(debug) {console.log(album.name+" removed for invalid term in title.");}
+                    }
+                });
+                if (!skip) {
+                    let tracksOffset = 0;
+                    let totalAlbumTracks = 0;
+                    do {
+                        const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(album.Id)}/albums/tracks?market=US&limit=50&offset=${tracksOffset}`, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`
+                            }
+                        });
+                        totalAlbumTracks = albumTrackList.data.total;
+                        albumTrackList.data.items.forEach(albumTrack => {
+                            let skip = false;
+                            bannedWords.forEach(word => {
+                                if (albumTrack.name.toLowerCase().includes(word.toLowerCase())) {
+                                    skip = true;
+                                    if(debug) {console.log(albumTrack.name+" removed for invalid term in title.");}
+                                }
+                            });
+                            if(!skip) {
+                                durations.forEach(duration => {
+                                    if (albumTrack.duration_ms < duration) { songsByDuration[duration] += 1;}
+                                });
+                                wordCounts.forEach(wordCount => {
+                                    if (albumTrack.name.split(" ").length = wordCount) { songsByWordcount[wordCount] += 1;}
+                                });
+                        });
+                        tracksOffset += 50;
+                    } while (tracksOffset < totalAlbumTracks);
+                }
+            });
+        }
+        let songsByDurWordcount = { duration: songsByDuration, wordcount: songsByWordcount};
+        res.json(songsByDurWordcount);
+    } catch (error) {
+        console.error('Error during search: ', error);
+        res.status(500).send('Error during search');
+    }
+});
+
+
 app.post('/list-songs-by-duration-wordcount', async (req, res) => {
     try {
         const artistName = req.body.artistName;
