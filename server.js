@@ -693,7 +693,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
-        let albumArr = Object.Keys(albumsObj);
+        let albumArr = Object.keys(albumsObj);
         if(debug) {console.log(`Album list at: ${albumArr}`);}
         for(let j = 0; j < albumArr.length; j+=1) {
             let albumId = albumArr[j];
