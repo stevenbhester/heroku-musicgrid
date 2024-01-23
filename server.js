@@ -490,85 +490,7 @@ app.post('/fetch-top-artists', async (req, res) => {
     }
 });
 
-app.post('/list-songs-by-year', async (req, res) => {
-    try {
-        const artistId = req.body.artistId;
-        let searchGroups = "single,album";
-        let debug = true;
-        
-        let offset = 0;
-        let albumOffset = 0;
-        let totalResults = 0;
-        const songsByYearSumm = {};
-        const songsByYearDetails = {};
-        let albumArr = [];
-        const bannedWords = ["live at", "live from", "live on", "- live", "- demo", "remix", "radio edit", "rmx", "anniversary", "deluxe", "instrumental"]
-        const accessToken = await getSpotifyAccessToken();
-
-        // Pull all albums to later pull all tracks
-         do {
-            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&offset=${albumOffset}`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
-            totalAlbums = albumList.data.total;
-            albumList.data.items.forEach(album => {
-                albumArr.push(album.id);
-            });
-            albumOffset += 50;
-        } while (albumOffset < totalAlbums);
-        if(debug) {console.log(`Album list at: ${albumArr}`);}
-
-        // Now count releases by year for each response date
-        // We can search up to 20 albums at once
-        for(let i = 0; i < albumArr.length; i+=20) {
-            let albumIds = albumArr.slice(i,i+20).join(",");
-            if(debug) {console.log(`Searching albums https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`);}
-            const albumDetails = await axios.get(`https://api.spotify.com/v1/albums?ids=${encodeURIComponent(albumIds)}&market=US`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
-            albumDetails.data.albums.forEach(album => {
-                if(debug) {console.log("Checking album "+album.name);}
-                //First we check if the album contains any banned words (filtering for alternate versions and remixes)
-                let skip = false;
-                bannedWords.forEach(word => {
-                    if (album.name.toLowerCase().includes(word.toLowerCase())) {
-                        skip = true;
-                        if(debug) {console.log(album.name+" removed for invalid term in title.");}
-                    }
-                });
-                if (!skip) {
-                    let currKeys = Object.keys(songsByYearSumm);
-                    let currYear = album.release_date.slice(0,4) 
-                    if(currKeys.length >= 0 && currKeys.includes(currYear)) {
-                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByYearSumm[currYear]+album.total_tracks));}
-                        songsByYearSumm[currYear]+=album.total_tracks;
-                        album.tracks.items.forEach(albumTrack => {
-                            songsByYearDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                        });
-                    } else {
-                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
-                        songsByYearSumm[currYear]=album.total_tracks;
-                        songsByYearDetails[currYear] = [];
-                        album.tracks.items.forEach(albumTrack => {
-                            songsByYearDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
-                        });
-                    }
-                }
-            });
-        }
-        res.json({summary: songsByYearSumm, details: songsByYearDetails});
-    } catch (error) {
-        console.error('Error during release year check: ', error);
-        res.status(500).send('Error during release year check');
-    }
-});
-
-
-app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
+app.post('/rich-artist-lookup', async (req, res) => {
     try {
         const artistId = req.body.artistId;
         let searchGroups = "single,album";
@@ -583,6 +505,8 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
         const songsByWordcountSumm = {};
         const songsByDurationDetails = {};
         const songsByWordcountDetails = {};
+        const songsByReleaseDateSumm = {};
+        const songsByReleaseDateDetails = {};
         let albumArr = [];
         let tracksArr = [];
         durations.forEach( duration => {
@@ -615,6 +539,22 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                 });
                 if(!skip) {
                     albumArr.push(album.id);
+                    let currKeys = Object.keys(songsByReleaseDateSumm);
+                    let currYear = album.release_date.slice(0,4) 
+                    if(currKeys.length >= 0 && currKeys.includes(currYear)) {
+                        if(debug) {console.log(currYear+" already exists in year index, count now at "+(songsByReleaseDateSumm[currYear]+album.total_tracks));}
+                        songsByReleaseDateSumm[currYear]+=album.total_tracks;
+                        album.tracks.items.forEach(albumTrack => {
+                            songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        });
+                    } else {
+                        if(debug) {console.log(currYear+" added fresh to year index with "+album.total_tracks+" tracks");}
+                        songsByReleaseDateSumm[currYear]=album.total_tracks;
+                        songsByReleaseDateDetails[currYear] = [];
+                        album.tracks.items.forEach(albumTrack => {
+                            songsByReleaseDateDetails[currYear].push({id:albumTrack.id, name:albumTrack.name}); // TODO: This isn't exhaustive we should actually search Album tracks or hit existing endpoint
+                        });
+                    }
                 }
             });
             albumOffset += 50;
@@ -663,12 +603,11 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
                 });
             } 
         }
-        let songsByDurWordcountSumm = { duration: songsByDurationSumm, wordcount: songsByWordcountSumm};
-        let songsByDurWordcountDetails = { duration: songsByDurationDetails, wordcount: songsByWordcountDetails};
-        res.json({summary: songsByDurWordcountSumm, details: songsByDurWordcountDetails});
+        let songSummary = { duration: songsByDurationSumm, wordcount: songsByWordcountSumm, releasedate: songsByReleaseDateSumm }
+        let songDetails = { duration: songsByDurationDetails, wordcount: songsByWordcountDetails, releasedate: songsByReleaseDateDetails }
+        res.json({summary: songSummary, details: songDetails});
     } catch (error) {
         console.error('Error during search: ', error);
         res.status(500).send('Error during search');
     }
 });
-
