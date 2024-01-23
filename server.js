@@ -752,7 +752,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         let songDetails = { duration: songsByDurationDetails, wordcount: songsByWordcountDetails, releasedate: songsByReleaseDateDetails }
         res.json({summary: songSummary, details: songDetails});
     } catch (error) {
-        console.error('Error during search: ', error);
+        console.error('Error during search: ');
         res.status(500).send('Error during search');
     }
 });
