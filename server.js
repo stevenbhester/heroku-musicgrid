@@ -521,12 +521,12 @@ app.post('/rich-artist-lookup', async (req, res) => {
 
         // Pull all albums to later pull all tracks
          do {
-            albumPull(albumOffset);
+            await albumPull(albumOffset);
             albumOffset += 50;
         } while (albumOffset < totalAlbums);
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
-        function albumPull(albumOffset) {
+        async function albumPull(albumOffset) {
             setTimeout(function(){
                 const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
                     headers: {
@@ -570,21 +570,21 @@ app.post('/rich-artist-lookup', async (req, res) => {
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
         for(let j = 0; j < albumArr.length; j+=1) {
-            albumDeepPull(j);
+            await albumDeepPull(j);
         }
 
-        function albumDeepPull(j) {
+        function async albumDeepPull(j) {
             setTimeout(function() {
                 let tracksOffset = 0;
                 let totalAlbumTracks = 1;
                 let albumId = albumArr[j];
                 for(let tracksOffset = 0; tracksOffset<totalAlbumTracks; tracksOffset+=50) {
-                    albumTrackPull(trackOffset);
+                    await albumTrackPull(trackOffset);
                 } 
             }, j*2500);
         }
 
-        function albumTrackPull(trackOffset) {
+        function async albumTrackPull(trackOffset) {
             setTimeout(function() {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
