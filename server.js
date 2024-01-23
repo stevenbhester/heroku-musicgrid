@@ -586,7 +586,7 @@ app.post('/list-songs-by-duration-wordcount-v2', async (req, res) => {
 
         // Pull all albums to later pull all tracks
          do {
-            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${offset}`, {
+            const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`
                 }
