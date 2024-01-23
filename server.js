@@ -651,7 +651,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
 
 
         console.log("Fetching /artists/artistId/albums for "+artistId);
-        console.log(`Postman - 'Authorization': `Bearer ${accessToken}`);
+        console.log(`Postman - 'Authorization': 'Bearer ${accessToken}'`);
         console.log(`Postman - https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`);
         const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
             headers: {
