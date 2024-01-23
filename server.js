@@ -527,7 +527,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
         if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         async function albumPull(albumOffset) {
-            setTimeout(function(){
+            setTimeout(async function(){
                 const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`
@@ -574,7 +574,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
         }
 
         function async albumDeepPull(j) {
-            setTimeout(function() {
+            setTimeout(async function() {
                 let tracksOffset = 0;
                 let totalAlbumTracks = 1;
                 let albumId = albumArr[j];
@@ -585,7 +585,7 @@ app.post('/rich-artist-lookup', async (req, res) => {
         }
 
         function async albumTrackPull(trackOffset) {
-            setTimeout(function() {
+            setTimeout(async function() {
                 const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`
