@@ -649,7 +649,6 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         });
         const accessToken = await getSpotifyAccessToken();
 
-        if(debug) {console.log(`Album list at: ${albumArr}`);}
 
         console.log("Fetching /artists/artistId/albums for "+artistId);
         const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
@@ -693,6 +692,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         // Now count releases by year for each response date
         // We can search up to 20 albums at once
         let albumArr = Object.Keys(albumsObj);
+        if(debug) {console.log(`Album list at: ${albumArr}`);}
         for(let j = 0; j < albumArr.length; j+=1) {
             let albumId = albumArr[j];
             console.log("Fetching /albums/albumid/tracks for artist "+artistId+" album "+albumId);
