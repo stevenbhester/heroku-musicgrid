@@ -264,6 +264,23 @@ app.post('/check-answer', async (req, res) => {
     }
   });
 
+
+//Endpoint to evaluate custom guesses against the answer list
+app.post('/check-custom-answer', async (req, res) => {
+    try {
+        const { songGuess, fieldGuessed, customGridId } = req.body;
+        const songGuessIlike = `%${songGuess}%`
+        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM custom_answers WHERE custom_grid_id = CAST($3 AS VARCHAR(10)) AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const { rows } = await pool.query(query, [songGuess, fieldGuessed, customGridId, songGuessIlike]);
+        console.log( rows ); 
+        res.json(rows);
+    } catch (err) {
+        console.error('Error updating checking guess:'+err.message);
+        res.status(500).send('Error checking a guess answer');
+    }
+  });
+
+
 //Endpoint to update encoded answers table
 app.post('/update-encoded-answers', async (req, res) => {
     try {
@@ -333,6 +350,38 @@ app.post('/get-cheat-preview-url', async (req, res) => {
         `;
 
         const result = await client.query(query, [gridId, fieldKey]);
+
+        // Check if a result was found
+        if (result.rows.length > 0) {
+            const previewUrl = result.rows[0].preview_url;
+            res.json({ previewUrl });
+        } else {
+            res.status(404).send('Preview URL not found for the given field and grid ID.');
+        }
+
+        client.release();
+    } catch (err) {
+        console.error('Error fetching cheat preview URL:', err.message);
+        client?.release();
+        res.status(500).send('Error fetching cheat preview URL');
+    }
+});
+
+app.post('/get-custom-cheat-preview-url', async (req, res) => {
+    try {
+        const { customGridId, fieldKey } = req.body;
+        const client = await pool.connect();
+
+        // Query to find the most popular song's preview URL for a specific fieldKey and gridId
+        const query = `
+            SELECT preview_url
+            FROM custom_answers
+            WHERE custom_grid_id = $1 AND field = $2 AND preview_url IS NOT NULL
+            ORDER BY normed_score ASC, RANDOM()
+            LIMIT 1
+        `;
+
+        const result = await client.query(query, [customGridId, fieldKey]);
 
         // Check if a result was found
         if (result.rows.length > 0) {
