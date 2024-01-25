@@ -224,6 +224,19 @@ app.post('/grid-data', async (req, res) => {
     }
 });
 
+//Endpoint to get contents of specific custom grid
+app.post('/custom-grid-data', async (req, res) => {
+    try {
+        const { custom_grid_id } = req.body;
+        const query = 'SELECT field_type, field, field_value FROM custom_templates WHERE custom_grid_id = CAST($1 AS VARCHAR(10)) ORDER BY field_type ASC, field ASC'; // Replace with your actual query
+        const { rows } = await pool.query(query, [custom_grid_id]);
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error fetching grid data');
+    }
+});
+
 //Endpoint to get list of grids for administration
 app.get('/fetch-grid-summary', async (req, res) => {
     try {
@@ -267,6 +280,33 @@ app.post('/update-encoded-answers', async (req, res) => {
             // Insert new answer data 
             const insertQuery = 'INSERT INTO musicgrid_answers (field, song_name, popularity, normed_score, preview_url, grid_id) VALUES ($1, $2, $3, $4, $5, $6)';
             await client.query(insertQuery, [fieldKey, song, popularity, normedAnswerScore, previewUrl, gridId]);
+        }
+
+        client.release();
+        res.send('Encoded answers updated successfully');
+    } catch (err) {
+        console.error('Error updating encoded answers:', err.message);
+        client?.release();
+        res.status(500).send('Error updating encoded answers');
+    }
+});
+
+//Endpoint to update encoded answers for custom table
+app.post('/update-custom-encoded-answers', async (req, res) => {
+    try {
+        const { encodedAnswers } = req.body;
+        const client = await pool.connect();
+
+        for (const answer of encodedAnswers) {
+            const { fieldKey, song, popularity, normedAnswerScore, previewUrl, customGridId } = answer;
+
+            // Delete existing entries for the grid IDs
+            const delQuery = 'DELETE FROM custom_answers WHERE custom_grid_id = $1 AND field = $2 and song_name = $3';
+            await client.query(delQuery, [customGridId, fieldKey, song]);
+
+            // Insert new answer data 
+            const insertQuery = 'INSERT INTO musicgrid_answers (field, song_name, popularity, normed_score, preview_url, custom_grid_id) VALUES ($1, $2, $3, $4, $5, $6)';
+            await client.query(insertQuery, [fieldKey, song, popularity, normedAnswerScore, previewUrl, customGridId]);
         }
 
         client.release();
