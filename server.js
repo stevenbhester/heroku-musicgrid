@@ -757,7 +757,7 @@ app.post('/create-custom-table', async (req, res) => {
     try {
         const { gridOutline } = req.body;
         const client = await pool.connect();
-        let gridContents = gridOutline.contents;
+        let gridContents = gridOutline.content;
         let categoryContents = gridOutlne.categories;
         let artists = Object.keys(gridContents);
         let categories = Object.keys(categoryContents);
@@ -812,7 +812,6 @@ app.post('/create-custom-table', async (req, res) => {
         res.send('Custom table saved properly');
     } catch (err) {
         console.error('Error updating encoded answers:', err.message);
-        client?.release();
         res.status(500).send('Error storing custom table');
     }
 });
