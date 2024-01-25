@@ -801,9 +801,9 @@ app.post('/create-custom-table', async (req, res) => {
                     songAnswerObj = artCatAnswersArr[j];
                     songName = songAnswerObj.name;
                     if(j==artCatAnswersArr.length-1) {
-                        songAnswers+=`"${songName}",`;
-                    } else {
                         songAnswers+=`"${songName}"`;
+                    } else {
+                        songAnswers+=`"${songName}", `;
                     }
                 }
                 insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+artistAnswerNum+" A"+categoryAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
