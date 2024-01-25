@@ -755,7 +755,9 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
 
 app.post('/create-custom-table', async (req, res) => {
     try {
-        const { gridOutline } = req.body;
+        const gridOutline = req.body;
+        console.log(gridOutline);
+        console.dir(gridOutline);
         const client = await pool.connect();
         let gridContents = gridOutline.content;
         let categoryContents = gridOutlne.categories;
