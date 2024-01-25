@@ -865,7 +865,6 @@ app.post('/create-custom-table', async (req, res) => {
 
         client.release();
         res.json({customGridId: customGridId});
-        res.send(customGridId);
     } catch (err) {
         console.error('Error updating encoded answers:', err.message);
         res.status(500).send('Error storing custom table');
