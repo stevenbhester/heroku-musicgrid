@@ -808,7 +808,7 @@ app.post('/create-custom-table', async (req, res) => {
         const nextIdQuery = 'SELECT custom_grid_id FROM custom_templates ORDER BY custom_grid_id DESC LIMIT 1';
         const latestGridId = await client.query(nextIdQuery);
 
-        let customGridId = 0;
+        let customGridId = 1;
         if (latestGridId.rows.length > 0) {
             customGridId = parseInt(latestGridId.rows[0].custom_grid_id);
         } 
@@ -864,6 +864,7 @@ app.post('/create-custom-table', async (req, res) => {
         }
 
         client.release();
+        res.json({customGridId: customGridId});
         res.send(customGridId);
     } catch (err) {
         console.error('Error updating encoded answers:', err.message);
