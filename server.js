@@ -851,10 +851,11 @@ app.post('/create-custom-table', async (req, res) => {
                         songAnswers+=`"${songName}", `;
                     }
                 }
-                insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+artistAnswerNum+" A"+categoryAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+                insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+categoryAnswerNum+" A"+artistAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
                 categoryAnswerNum++;
             });
             artistAnswerNum++;
+            categoryAnswerNum = 1;
         });
 
         for(var x=0;x<insertRows.length;x++) {
