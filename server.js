@@ -778,7 +778,6 @@ app.post('/create-custom-table', async (req, res) => {
             artistNum++;
         });
         categories.forEach(categoryTag => {
-            currInsert
             let categoryTitle = "";
             let categoryData = categoryContents[categoryTag];
             if(categoryTag == "wordCount") {
