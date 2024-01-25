@@ -765,9 +765,10 @@ app.post('/create-custom-table', async (req, res) => {
         let categories = Object.keys(categoryContents);
         
         // Get the next available ID for a custom grid here
-        // const nextIdQuery = 'DELETE FROM musicgrid_answers WHERE grid_id = $1 AND field = $2 and song_name = $3';
-        // const customGridId = await client.query(nextId);
-        let customGridId = 1;
+        const nextIdQuery = 'SELECT custom_grid_id FROM custom_templates ORDER BY custom_grid_id DESC LIMIT 1';
+        const latestGridId = await client.query(nextId);
+        const customGridId = parseInt(latestGridId)+1;
+        console.log("Assigning grid custom id "+customGridId);
 
         let categoryNum = 1;
         let artistNum = 1;
@@ -819,7 +820,7 @@ app.post('/create-custom-table', async (req, res) => {
         }
 
         client.release();
-        res.send('Custom table saved properly');
+        res.send(customGridId);
     } catch (err) {
         console.error('Error updating encoded answers:', err.message);
         res.status(500).send('Error storing custom table');
