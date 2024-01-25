@@ -305,7 +305,7 @@ app.post('/update-custom-encoded-answers', async (req, res) => {
             await client.query(delQuery, [customGridId, fieldKey, song]);
 
             // Insert new answer data 
-            const insertQuery = 'INSERT INTO musicgrid_answers (field, song_name, popularity, normed_score, preview_url, custom_grid_id) VALUES ($1, $2, $3, $4, $5, $6)';
+            const insertQuery = 'INSERT INTO custom_answers (field, song_name, popularity, normed_score, preview_url, custom_grid_id) VALUES ($1, $2, $3, $4, $5, $6)';
             await client.query(insertQuery, [fieldKey, song, popularity, normedAnswerScore, previewUrl, customGridId]);
         }
 
