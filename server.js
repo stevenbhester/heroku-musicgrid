@@ -752,3 +752,67 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         res.status(500).send('Error during search');
     }
 });
+
+app.post('/create-custom-table', async (req, res) => {
+    try {
+        const { gridOutline } = req.body;
+        const client = await pool.connect();
+        let gridContents = gridOutline.contents;
+        let categoryContents = gridOutlne.categories;
+        let artists = Object.keys(gridContents);
+        let categories = Object.keys(categoryContents);
+        
+        // Get the next available ID for a custom grid here
+        // const nextIdQuery = 'DELETE FROM musicgrid_answers WHERE grid_id = $1 AND field = $2 and song_name = $3';
+        // const customGridId = await client.query(nextId);
+        let customGridId = 1;
+
+        let categoryNum = 1;
+        let artistNum = 1;
+        let insertRows = [];
+        artists.forEach(artistName => {
+            let artistAnswers = gridContents[artistName];
+            insertRows.push({custom_grid_id: customGridId, field_type: "Artist", field: "A"+artistNum, field_value: artistName, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+            artistNum++;
+        });
+        categories.forEach(categoryTag => {
+            currInsert
+            let categoryTitle = "";
+            let categoryData = categoryContents[categoryTag];
+            if(categoryTag == "wordCount") {
+                categoryTitle = "Songs with "+categoryData+" word titles";
+            } else if(categoryTag == "songLength") {
+                categoryTitle = "Songs "+categoryData.type+" "+categoryData.durmin+" minutes long";
+            } else if(categoryTag == "yearRange") {
+                categoryTitle = "Songs released from "+categoryData+" to "+(parseInt(categoryData)+5);
+            }
+            insertRows.push({custom_grid_id: customGridId, field_type: "Category", field: "C"+categoryNum, field_value: categoryTitle, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+            categoryNum++;
+        });
+        let artistAnswerNum = 1;
+        let categoryAnswerNum = 1;
+        artists.forEach(artistName => {
+            categories.forEach(categoryTag => {
+                let artistAnswers = gridContents[artistName];
+                let artCatAnswersArr = artistAnswers[categoryTag];
+                let songAnswers = "\""+artCatAnswersArr.join("\" ,\"")+"\"";
+                insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+artistAnswerNum+" A"+categoryAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+                categoryAnswerNum++;
+            });
+            artistAnswerNum++;
+        });
+        
+        insertRows.forEach(insertRow => {
+            // Insert new answer data 
+            const insertQuery = 'INSERT INTO custom_templates (custom_grid_id, field_type, field, field_value, grid_title, owner_id) VALUES ($1, $2, $3, $4, $5, $6)';
+            await client.query(insertQuery, [insertRow.custom_grid_id, insertRow.field_type, insertRow.field, insertRow.field_value, insertRow.grid_title, insertRow.owner_id]);
+        });
+
+        client.release();
+        res.send('Custom table saved properly');
+    } catch (err) {
+        console.error('Error updating encoded answers:', err.message);
+        client?.release();
+        res.status(500).send('Error storing custom table');
+    }
+});
