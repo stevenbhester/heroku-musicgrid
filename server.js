@@ -796,7 +796,16 @@ app.post('/create-custom-table', async (req, res) => {
             categories.forEach(categoryTag => {
                 let artistAnswers = gridContents[artistName];
                 let artCatAnswersArr = artistAnswers[categoryTag];
-                let songAnswers = "\""+artCatAnswersArr.join("\" ,\"")+"\"";
+                let songAnswers = "";
+                for (j =0; j<artCatAnswersArr.length; j++) {
+                    songAnswerObj = artCatAnswersArr[j];
+                    songName = songAnswerObj.name;
+                    if(j==artCatAnswersArr.length-1) {
+                        songAnswers+=`"${songName}",`;
+                    } else {
+                        songAnswers+=`"${songName}"`;
+                    }
+                }
                 insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+artistAnswerNum+" A"+categoryAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
                 categoryAnswerNum++;
             });
