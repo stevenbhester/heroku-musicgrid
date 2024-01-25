@@ -810,7 +810,7 @@ app.post('/create-custom-table', async (req, res) => {
 
         let customGridId = 1;
         if (latestGridId.rows.length > 0) {
-            customGridId = parseInt(latestGridId.rows[0].custom_grid_id);
+            customGridId = parseInt(latestGridId.rows[0].custom_grid_id)+1;
         } 
         console.log("Assigning grid custom id "+customGridId);
 
