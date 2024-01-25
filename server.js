@@ -806,8 +806,12 @@ app.post('/create-custom-table', async (req, res) => {
         
         // Get the next available ID for a custom grid here
         const nextIdQuery = 'SELECT custom_grid_id FROM custom_templates ORDER BY custom_grid_id DESC LIMIT 1';
-        const latestGridId = await client.query(nextId);
-        const customGridId = parseInt(latestGridId)+1;
+        const latestGridId = await client.query(nextIdQuery);
+
+        let customGridId = 0;
+        if (latestGridId.rows.length > 0) {
+            customGridId = parseInt(latestGridId.rows[0].custom_grid_id);
+        } 
         console.log("Assigning grid custom id "+customGridId);
 
         let categoryNum = 1;
