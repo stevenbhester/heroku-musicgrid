@@ -760,7 +760,7 @@ app.post('/create-custom-table', async (req, res) => {
         console.dir(gridOutline);
         const client = await pool.connect();
         let gridContents = gridOutline.content;
-        let categoryContents = gridOutlne.categories;
+        let categoryContents = gridOutline.categories;
         let artists = Object.keys(gridContents);
         let categories = Object.keys(categoryContents);
         
