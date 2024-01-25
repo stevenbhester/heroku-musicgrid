@@ -801,12 +801,12 @@ app.post('/create-custom-table', async (req, res) => {
             });
             artistAnswerNum++;
         });
-        
-        insertRows.forEach(insertRow => {
-            // Insert new answer data 
+
+        for(var x=0;x<insertRows.length;x++) {
+            insertRow = insertRows[x];
             const insertQuery = 'INSERT INTO custom_templates (custom_grid_id, field_type, field, field_value, grid_title, owner_id) VALUES ($1, $2, $3, $4, $5, $6)';
             await client.query(insertQuery, [insertRow.custom_grid_id, insertRow.field_type, insertRow.field, insertRow.field_value, insertRow.grid_title, insertRow.owner_id]);
-        });
+        }
 
         client.release();
         res.send('Custom table saved properly');
