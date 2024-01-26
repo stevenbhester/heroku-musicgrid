@@ -200,8 +200,8 @@ app.get('/latest-grid', async (req, res) => {
 app.post('/set-grid-live', async (req, res) => {
     try {
         const { grid_id } = req.body;
-        const setOffQuery = 'UPDATE musicgrid_templates SET is_live = FALSE WHERE grid_id <> CAST($1 AS VARCHAR(10))';
-        const setLiveQuery = 'UPDATE musicgrid_templates SET is_live = TRUE WHERE grid_id = CAST($1 AS VARCHAR(10))';
+        const setOffQuery = 'UPDATE musicgrid_templates SET is_live = FALSE WHERE grid_id <> $1';
+        const setLiveQuery = 'UPDATE musicgrid_templates SET is_live = TRUE WHERE grid_id = $1';
         const { rows } = await pool.query(setOffQuery, [grid_id]);
         const { rows2 } = await pool.query(setLiveQuery, [grid_id]);
         res.json( rows2);
@@ -215,7 +215,7 @@ app.post('/set-grid-live', async (req, res) => {
 app.post('/grid-data', async (req, res) => {
     try {
         const { grid_id } = req.body;
-        const query = 'SELECT field_type, field, field_value FROM musicgrid_templates WHERE grid_id = CAST($1 AS VARCHAR(10)) ORDER BY field_type ASC, field ASC'; // Replace with your actual query
+        const query = 'SELECT field_type, field, field_value FROM musicgrid_templates WHERE grid_id = $1 ORDER BY field_type ASC, field ASC'; // Replace with your actual query
         const { rows } = await pool.query(query, [grid_id]);
         res.json(rows);
     } catch (err) {
@@ -228,7 +228,7 @@ app.post('/grid-data', async (req, res) => {
 app.post('/custom-grid-data', async (req, res) => {
     try {
         const { custom_grid_id } = req.body;
-        const query = 'SELECT field_type, field, field_value FROM custom_templates WHERE custom_grid_id = CAST($1 AS VARCHAR(10)) ORDER BY field_type ASC, field ASC'; // Replace with your actual query
+        const query = 'SELECT field_type, field, field_value FROM custom_templates WHERE custom_grid_id = $1 ORDER BY field_type ASC, field ASC'; // Replace with your actual query
         const { rows } = await pool.query(query, [custom_grid_id]);
         res.json(rows);
     } catch (err) {
@@ -255,7 +255,7 @@ app.post('/check-answer', async (req, res) => {
     try {
         const { songGuess, fieldGuessed, gridId } = req.body;
         const songGuessIlike = `%${songGuess}%`
-        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = CAST($3 AS VARCHAR(10)) AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = $3 AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
         const { rows } = await pool.query(query, [songGuess, fieldGuessed, gridId, songGuessIlike]);
         console.log( rows ); 
         res.json(rows);
@@ -271,7 +271,7 @@ app.post('/check-custom-answer', async (req, res) => {
     try {
         const { songGuess, fieldGuessed, customGridId } = req.body;
         const songGuessIlike = `%${songGuess}%`
-        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM custom_answers WHERE custom_grid_id = CAST($3 AS VARCHAR(10)) AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM custom_answers WHERE custom_grid_id = $3 AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
         const { rows } = await pool.query(query, [songGuess, fieldGuessed, customGridId, songGuessIlike]);
         console.log( rows ); 
         res.json(rows);
