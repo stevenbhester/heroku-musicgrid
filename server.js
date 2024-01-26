@@ -537,14 +537,8 @@ app.post('/list-songs-by-wordcount', async (req, res) => {
 app.post('/fetch-top-artists', async (req, res) => {
     try {
         const accessToken = req.body.accessToken;
-        const timeRange = req.body.timeRange || 'Medium Term';
-        let timeRangeParsed = 'medium_term';
+        const timeRangeParsed = req.body.timeRange || 'medium_term';
         let debug = true;
-        if ( timeRange == "Long Term" ) {
-            timeRangeParsed = "long_term";
-        } else if (timeRange == "Short Term") {
-               timeRangeParsed = "short_term";
-        }
         if(debug) {console.log("Bearer token for user is "+accessToken)};
         let topArtists = [];
 
