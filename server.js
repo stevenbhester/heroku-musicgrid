@@ -882,7 +882,7 @@ app.post('/create-custom-table', async (req, res) => {
             } else if(categoryTag == "yearRange") {
                 categoryTitle = "Songs released from "+categoryData+" to "+(parseInt(categoryData)+5);
             }
-            insertRows.push({custom_grid_id: customGridId, field_type: "Category", field: "C"+categoryNum, field_value: categoryTitle, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+            insertRows.push({custom_grid_id: customGridId, field_type: "Category", field: "C"+categoryNum, field_value: categoryTitle, grid_title: gridTitle, owner_id: "shester"});
             categoryNum++;
         });
         let artistAnswerNum = 1;
@@ -901,7 +901,7 @@ app.post('/create-custom-table', async (req, res) => {
                         songAnswers+=`"${songName}", `;
                     }
                 }
-                insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+categoryAnswerNum+" A"+artistAnswerNum, field_value: songAnswers, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+                insertRows.push({custom_grid_id: customGridId, field_type: "Answer", field: "C"+categoryAnswerNum+" A"+artistAnswerNum, field_value: songAnswers, grid_title: gridTitle, owner_id: "shester"});
                 categoryAnswerNum++;
             });
             artistAnswerNum++;
