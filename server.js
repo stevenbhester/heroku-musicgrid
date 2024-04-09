@@ -922,7 +922,7 @@ app.post('/create-custom-table', async (req, res) => {
     }
 });
 
-app.post('/create-custom-table', async (req, res) => {
+app.post('/fetch-ai-gridname', async (req, res) => {
     try {
         const artistsJoined = req.body.artists;
         const response = await axios.post(
