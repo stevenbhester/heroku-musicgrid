@@ -233,7 +233,7 @@ app.post('/grid-data', async (req, res) => {
 app.post('/custom-grid-data', async (req, res) => {
     try {
         const { custom_grid_id } = req.body;
-        const query = 'SELECT field_type, field, field_value FROM custom_templates WHERE custom_grid_id = $1 ORDER BY field_type ASC, field ASC'; // Replace with your actual query
+        const query = 'SELECT field_type, field, field_value, grid_title FROM custom_templates WHERE custom_grid_id = $1 ORDER BY field_type ASC, field ASC'; // Replace with your actual query
         const { rows } = await pool.query(query, [custom_grid_id]);
         res.json(rows);
     } catch (err) {
