@@ -958,11 +958,11 @@ app.post('/fetch-ai-gridname', async (req, res) => {
         console.log(response.data.choices[0]);
         console.log("More specifically: ");
         console.log(response.data.choices[0].message.content.trim());
-        return response.data.choices[0];
+        res.json(response.data.choices[0]);
     } catch (error) {
         console.log("Error hit! ", error);
         console.error(`Error generating music grid name: ${error.message}`);
         let fallback = { message: { content: "AI Failure Fallback Title" } }
-        return fallback; // Default name
+        res.json(fallback); // Default name
     }
 });
