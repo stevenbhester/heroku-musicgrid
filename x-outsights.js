@@ -39,22 +39,21 @@ async function scrapeFollowerCount(url) {
 }
 
 async function recordFollowerCount(follCount, url) {
-    // PostgreSQL connection using Pool
-    const pool = new Pool({
+     const pool = new Pool({
         connectionString: process.env.DATABASE_URL,
         ssl: {
             rejectUnauthorized: false // Necessary for Heroku
         }
     });
+
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         const date = new Date();
-        // Insert new count data 
+
         const insertQuery = 'INSERT INTO x_followers (recorded_date, url, follower_count) VALUES ($1, $2, $3)';
         await client.query(insertQuery, [date, url, follCount]);
-
-        client.release();
-        res.send('Follower counts recorded');
+        console.log('Follower counts recorded');
     } catch (err) {
         console.error('Error recording follower counts:', err.message);
     } finally {
