@@ -934,11 +934,11 @@ app.post('/fetch-ai-gridname', async (req, res) => {
                  temperature: 0.7
               }
            ]
-        }
+        };
         const aiHeaders = {
            'Authorization': `Bearer ${OPENAI_SECRET}`,
            'Content-Type': 'application/json'
-         }
+         };
         const response = await axios.post(
             'https://api.openai.com/v1/chat/completions',aiBody,
             {
@@ -951,4 +951,4 @@ app.post('/fetch-ai-gridname', async (req, res) => {
         console.error(`Error generating music grid name: ${error}`);
         return '(AI Failure Fallback Title)'; // Default name
     }
-}
+});
