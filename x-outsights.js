@@ -17,7 +17,6 @@ async function scrapeFollowerCount(url) {
         if (valueHandle.includes("Followers")) {
           followerCount = text;
         }
-      }
     }
     console.log("Follower count determined as: ", followerCount);
 
