@@ -937,7 +937,7 @@ async function generateMusicGridName(categories, artists) {
             },
             {
                 headers: {
-                    'Authorization': 'Bearer ' + ${CLIENT_SECRET},
+                    'Authorization': 'Bearer ' + ${OPENAI_SECRET},
                     'Content-Type': 'application/json'
                 }
             }
