@@ -1,3 +1,4 @@
+const { Pool } = require('pg');
 const puppeteer = require('puppeteer');
 
 async function scrapeFollowerCount(url) {
@@ -36,12 +37,34 @@ async function scrapeFollowerCount(url) {
 
     return followerCount;
 }
+async function recordFollowerCount(follCount, url) {
+    // PostgreSQL connection using Pool
+    const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+            rejectUnauthorized: false // Necessary for Heroku
+        }
+    });
+    try {
+        const client = await pool.connect();
+        const date = new Date();
+        // Insert new count data 
+        const insertQuery = 'INSERT INTO x_followers (recorded_date, url, follower_count) VALUES ($1, $2, $3)';
+        await client.query(insertQuery, [date, url, follCount]);
 
+        client.release();
+        res.send('Follower counts recorded');
+    } catch (err) {
+        console.error('Error recording follower counts:', err.message);
+        client?.release();
+        res.status(500).send('Error recording follower counts');
+    }
+});
 const url = 'https://x.com/TFT';
 scrapeFollowerCount(url)
     .then(followerCount => {
         console.log(`Follower Count: ${followerCount}`);
-        // Here you would add the code to insert the data into your PostgreSQL database
+        recordFollowerCount(followerCount, url);
     })
     .catch(error => {
         console.error('Scraping failed:', error);
