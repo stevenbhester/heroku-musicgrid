@@ -5,7 +5,14 @@ const cors = require('cors');
 const app = express();
 
 app.use(express.json());
-res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+const cors=require("cors");
+const corsOptions ={
+   origin:'*', 
+   credentials:true,            //access-control-allow-credentials:true
+   optionSuccessStatus:200,
+}
+
+app.use(cors(corsOptions)) 
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;  
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;  
