@@ -15,11 +15,17 @@ async function scrapeFollowerCount(url) {
   
     let links = await page.$$('a');
     console.log("links fetched");
-    for (var i=0; i < links.length; i++) {
-        let valueHandle = await links[i].getProperty('innerText');
-        console.log("valueHandles fetched");
-        console.dir(valueHandle);
-        if (valueHandle.includes("Followers")) {
+    let innerConts = [];
+
+    for (const link of links) {
+        let label = await this.page.evaluate(el => el.innerText, link);
+        innerConts.push(label);
+    }
+    for (var i=0; i < innerConts.length; i++) {
+        console.log("innerCount parsed");
+        iC = innerConts[i]
+        console.dir(iC);
+        if (iC.includes("Followers")) {
           followerCount = text;
         }
     }
