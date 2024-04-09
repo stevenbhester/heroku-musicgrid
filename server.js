@@ -852,6 +852,7 @@ app.post('/create-custom-table', async (req, res) => {
         let categoryContents = gridOutline.categories;
         let artists = Object.keys(gridContents);
         let categories = Object.keys(categoryContents);
+        let gridTitle = gridOutline.gridTitle || 'Placeholder Title';
         
         // Get the next available ID for a custom grid here
         const nextIdQuery = 'SELECT custom_grid_id FROM custom_templates ORDER BY custom_grid_id DESC LIMIT 1';
@@ -868,7 +869,7 @@ app.post('/create-custom-table', async (req, res) => {
         let insertRows = [];
         artists.forEach(artistName => {
             let artistAnswers = gridContents[artistName];
-            insertRows.push({custom_grid_id: customGridId, field_type: "Artist", field: "A"+artistNum, field_value: artistName, grid_title: "PlaceHolderTitle", owner_id: "shester"});
+            insertRows.push({custom_grid_id: customGridId, field_type: "Artist", field: "A"+artistNum, field_value: artistName, grid_title: gridTitle, owner_id: "shester"});
             artistNum++;
         });
         categories.forEach(categoryTag => {
