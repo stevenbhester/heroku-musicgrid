@@ -11,11 +11,9 @@ async function scrapeFollowerCount(url) {
     await page.goto(url, { waitUntil: 'networkidle0' }); 
     let followerCount = "";
   
-    const links = await page.$$('a') => {
-      const linkTextArr = [];
-      for (var i=0; i < links.length; i++) {
+    let links = await page.$$('a') 
+    for (var i=0; i < links.length; i++) {
         let valueHandle = await links[i].getProperty('innerText');
-        let linkText = await valueHandle.jsonValue();
         const text = getText(linkText);
         if (text.includes("Followers")) {
           followerCount = text;
