@@ -5,9 +5,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(express.json());
-app.use(cors({
-    origin: 'https://musicgrid.erincullison.com'
-}));
+res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;  
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;  
