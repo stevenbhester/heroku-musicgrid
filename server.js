@@ -929,7 +929,12 @@ app.post('/fetch-ai-gridname', async (req, res) => {
             'https://api.openai.com/v1/chat/completions',
             {
                  "model": "gpt-3.5-turbo",
-                 "messages": [{"role": "user", "content": `Your job is to create a clever, witty name for a custom trivia grid a user just created in my game, MusicGrid. The larger game is to guess songs that match categories and artists. There's 3 columns, each with one artist, and three columns, each with one category; users guess a song that matches the column's artist and the row's category. You need to name the title for a user's custom grid, with artists and categories they select. The name should be focused on the shared vibe of the artists; e.g. for Green Day/Linkin Park/My Chemical Romance, a clever version of Millenial Childhood Alt Rock would work. The name should be unique to the special vibe shared by the selected artists, always with as much specificity that makes it make sense for those three artists, never something that would fit a much larger subset of artists. The artists the user selected are ${artistsJoined}`}],
+                 "messages": [
+                     {
+                           "role": "user"
+                           , "content": `Your job is to create a clever, witty name for a custom trivia grid a user just created in my game, MusicGrid. The larger game is to guess songs that match categories and artists. There's 3 columns, each with one artist, and three columns, each with one category; users guess a song that matches the column's artist and the row's category. You need to name the title for a user's custom grid, with artists and categories they select. The name should be focused on the shared vibe of the artists; e.g. for Green Day/Linkin Park/My Chemical Romance, a clever version of Millenial Childhood Alt Rock would work. The name should be unique to the special vibe shared by the selected artists, always with as much specificity that makes it make sense for those three artists, never something that would fit a much larger subset of artists. The artists the user selected are ${artistsJoined}`
+                     }
+                 ],
                  "temperature": 0.7
             },
             {
