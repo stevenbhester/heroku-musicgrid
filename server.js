@@ -15,6 +15,7 @@ app.use(cors(corsOptions))
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;  
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;  
+const OPENAI_SECRET = process.env.OPENAI_API_KEY;
 
 // PostgreSQL connection using Pool
 const pool = new Pool({
@@ -919,3 +920,31 @@ app.post('/create-custom-table', async (req, res) => {
         res.status(500).send('Error storing custom table');
     }
 });
+const axios = require('axios');
+
+async function generateMusicGridName(categories, artists) {
+    try {
+        const response = await axios.post(
+            'https://api.openai.com/v1/engines/text-davinci-003/completions',
+            {
+                prompt: `Create a clever, witty name for a trivia game where players guess songs that match the categories: ${categories.join(', ')} for the artists ${artists.join(', ')}. The name should be punchy, clever, relevant, and have the potential to go viral.`,
+                max_tokens: 50,
+                temperature: 0.5,
+                top_p: 1,
+                n: 1,
+                stop: '\n'
+            },
+            {
+                headers: {
+                    'Authorization': 'Bearer ' + ${CLIENT_SECRET},
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        return response.data.choices[0].text.trim();
+    } catch (error) {
+        console.error('Error generating music grid name:', error);
+        return 'Clever Music Grid'; // Default name
+    }
+}
