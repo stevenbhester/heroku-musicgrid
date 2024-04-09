@@ -946,7 +946,7 @@ app.post('/fetch-ai-gridname', async (req, res) => {
             }
         );
 
-        return response.data.choices[0].message.content.trim();
+        return response.data.choices[0];
     } catch (error) {
         console.error(`Error generating music grid name: ${error}`);
         return '(AI Failure Fallback Title)'; // Default name
