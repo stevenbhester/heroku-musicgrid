@@ -954,6 +954,10 @@ app.post('/fetch-ai-gridname', async (req, res) => {
        
         console.log("Response received:");
         console.log(response);
+        console.log("Parsed relevant response data is:");
+        console.log(response.data.choices[0]);
+        console.log("More specifically: ");
+        console.log(response.data.choices[0].message.content.trim());
         return response.data.choices[0];
     } catch (error) {
         console.log("Error hit! ", error);
