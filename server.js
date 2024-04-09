@@ -925,6 +925,7 @@ app.post('/create-custom-table', async (req, res) => {
 app.post('/fetch-ai-gridname', async (req, res) => {
     try {
         const artistsJoined = req.body.artists;
+        console.log("Generating AI title from ",artistsJoined);
         const aiBody = {
            model: "gpt-3.5-turbo",
            messages: [
@@ -935,19 +936,27 @@ app.post('/fetch-ai-gridname', async (req, res) => {
            ],
            temperature: 0.7
         };
+        console.log("Body for request to OpenAI:");
+        console.log(aiBody);       
         const aiHeaders = {
            'Authorization': `Bearer ${OPENAI_SECRET}`,
            'Content-Type': 'application/json'
          };
+        console.log("Headers for request to OpenAI:");
+        console.log(aiHeaders);
+        console.log("Submitting request");
         const response = await axios.post(
             'https://api.openai.com/v1/chat/completions',aiBody,
             {
                 headers: aiHeaders
             }
         );
-
+       
+        console.log("Response received:");
+        console.log(response);
         return response.data.choices[0];
     } catch (error) {
+        console.log("Error hit! ", error);
         console.error(`Error generating music grid name: ${error.message}`);
         let fallback = { message: { content: "AI Failure Fallback Title" } }
         return fallback; // Default name
