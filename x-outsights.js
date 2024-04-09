@@ -15,6 +15,7 @@ async function scrapeFollowerCount(url) {
   
     let links = await page.$$('a');
     console.log("links fetched");
+    console.dir(links);
     let innerConts = [];
 
     for (const link of links) {
