@@ -25,7 +25,7 @@ async function scrapeFollowerCount(url) {
     }
     for (var i=0; i < innerConts.length; i++) {
         console.log("innerCount parsed");
-        iC = innerConts[i]
+        iC = innerConts[i];
         console.dir(iC);
         if (iC.includes("Followers")) {
           followerCount = iC;
@@ -37,6 +37,7 @@ async function scrapeFollowerCount(url) {
 
     return followerCount;
 }
+
 async function recordFollowerCount(follCount, url) {
     // PostgreSQL connection using Pool
     const pool = new Pool({
@@ -56,10 +57,13 @@ async function recordFollowerCount(follCount, url) {
         res.send('Follower counts recorded');
     } catch (err) {
         console.error('Error recording follower counts:', err.message);
-        client?.release();
-        res.status(500).send('Error recording follower counts');
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
-});
+}
+
 const url = 'https://x.com/TFT';
 scrapeFollowerCount(url)
     .then(followerCount => {
