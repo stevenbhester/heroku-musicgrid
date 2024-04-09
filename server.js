@@ -921,7 +921,6 @@ app.post('/create-custom-table', async (req, res) => {
         res.status(500).send('Error storing custom table');
     }
 });
-const axios = require('axios');
 
 async function generateMusicGridName(categories, artists) {
     try {
