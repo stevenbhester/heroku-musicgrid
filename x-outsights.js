@@ -3,7 +3,8 @@ const puppeteer = require('puppeteer');
 async function scrapeFollowerCount(url) {
     // Launch a headless browser
     const browser = await puppeteer.launch({
-        executablePath: process.env.CHROME_EXECUTABLE_PATH || '/app/.apt/usr/bin/google-chrome',
+        executablePath: process.env.CHROME_EXECUTABLE_PATH || process.env.GOOGLE_CHROME_BIN || '/app/.apt/usr/bin/google_chrome',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
         args: ['--no-sandbox', '--disable-setuid-sandbox'] 
     });
     const page = await browser.newPage();
