@@ -19,7 +19,7 @@ async function scrapeFollowerCount(url) {
     let innerConts = [];
 
     for (const link of links) {
-        let label = await this.page.evaluate(el => el.innerText, link);
+        let label = await page.evaluate(el => el.innerText, link);
         innerConts.push(label);
     }
     for (var i=0; i < innerConts.length; i++) {
@@ -27,7 +27,7 @@ async function scrapeFollowerCount(url) {
         iC = innerConts[i]
         console.dir(iC);
         if (iC.includes("Followers")) {
-          followerCount = text;
+          followerCount = iC;
         }
     }
     console.log("Follower count determined as: ", followerCount);
