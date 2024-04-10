@@ -62,15 +62,17 @@ async function recordFollowerCount(follCount, url) {
         }
     }
 }
-
-const urls = ['https://x.com/TFT','https://x.com/LeagueOfLegends','https://x.com/PlayVALORANT','https://x.com/play2xko'];
-for(url in urls) {
-    scrapeFollowerCount(url)
-        .then(followerCount => {
-            console.log(`Follower Count: ${followerCount}`);
-            recordFollowerCount(followerCount, url);
-        })
-        .catch(error => {
-            console.error('Scraping failed:', error);
-        });
+async function processUrls(urls) {
+    for (const url of urls) {
+        try {
+            const followerCount = await scrapeFollowerCount(url);
+            console.log(`Follower Count for ${url}: ${followerCount}`);
+            await recordFollowerCount(followerCount, url);
+        } catch (error) {
+            console.error(`Scraping failed for ${url}:`, error);
+        }
+    }
 }
+
+const urls = ['https://x.com/TFT','https://x.com/LeagueOfLegends','https://x.com/VALORANT','https://x.com/play2xko'];
+processUrls(urls);
