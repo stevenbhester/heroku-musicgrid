@@ -74,5 +74,5 @@ async function processUrls(urls) {
     }
 }
 
-const urls = ['https://x.com/TFT','https://x.com/LeagueOfLegends','https://x.com/VALORANT','https://x.com/play2xko'];
+const urls = ['https://x.com/TFT','https://x.com/LeagueOfLegends','https://twitter.com/VALORANT','https://x.com/play2xko'];
 processUrls(urls);
