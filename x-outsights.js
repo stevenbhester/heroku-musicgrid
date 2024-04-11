@@ -34,10 +34,13 @@ async function scrapeFollowerCount(url) {
               follCheckAudit = 5;
               foundFoll = true;
               followerCount = iC;
-              console.log("Follower count determined as: ", followerCount);
+              console.log(url, "Follower count determined as: ", followerCount);
             } else {
-                console.log("Follower count not found in pass #",follCheckAudit);
+                console.log(url, "Follower count not found in pass #",follCheckAudit);
                 follCheckAudit+=1;
+                if(follCheckAudit == 5) {
+                    console.log("Giving up on finding followers for ", url, " need to implement flag here and switch to hourly pulls?")
+                }
             }
         }
     
