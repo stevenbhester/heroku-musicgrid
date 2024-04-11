@@ -3,38 +3,46 @@ const puppeteer = require('puppeteer');
 
 async function scrapeFollowerCount(url) {
     // Launch a headless browser
-    const browser = await puppeteer.launch({
-        executablePath: process.env.CHROME_EXECUTABLE_PATH || process.env.GOOGLE_CHROME_BIN,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-    const page = await browser.newPage();
+    let follCheckAudit = 0;
+    let foundFoll = false;
+    while (follCheckAudit < 5) {
+        const browser = await puppeteer.launch({
+            executablePath: process.env.CHROME_EXECUTABLE_PATH || process.env.GOOGLE_CHROME_BIN,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        
+        // Navigate to the URL
+        console.log("Navigating to url");
+        await page.goto(url, { waitUntil: 'networkidle0' }); 
+        let followerCount = "";
+      
+        let links = await page.$$('a');
+        console.log("links fetched");
+        console.dir(links);
+        let innerConts = [];
     
-    // Navigate to the URL
-    console.log("Navigating to url");
-    await page.goto(url, { waitUntil: 'networkidle0' }); 
-    let followerCount = "";
-  
-    let links = await page.$$('a');
-    console.log("links fetched");
-    console.dir(links);
-    let innerConts = [];
-
-    for (const link of links) {
-        let label = await page.evaluate(el => el.innerText, link);
-        innerConts.push(label);
-    }
-    for (var i=0; i < innerConts.length; i++) {
-        console.log("innerCount parsed");
-        iC = innerConts[i];
-        console.dir(iC);
-        if (iC.includes("Followers")) {
-          followerCount = iC;
+        for (const link of links) {
+            let label = await page.evaluate(el => el.innerText, link);
+            innerConts.push(label);
         }
+        for (var i=0; i < innerConts.length; i++) {
+            console.log("innerCount parsed");
+            iC = innerConts[i];
+            console.dir(iC);
+            if (iC.includes("Followers")) {
+              follCheckAudit = 5;
+              foundFoll = true;
+              followerCount = iC;
+              console.log("Follower count determined as: ", followerCount);
+            } else {
+                console.log("Follower count not found in pass #",follCheckAudit);
+                follCheckAudit+=1;
+            }
+        }
+    
+        await browser.close();
     }
-    console.log("Follower count determined as: ", followerCount);
-
-    await browser.close();
-
     return followerCount;
 }
 
