@@ -5,6 +5,8 @@ async function scrapeFollowerCount(url) {
     // Launch a headless browser
     let follCheckAudit = 0;
     let foundFoll = false;
+    let followerCount = "";
+    
     while (follCheckAudit < 5) {
         const browser = await puppeteer.launch({
             executablePath: process.env.CHROME_EXECUTABLE_PATH || process.env.GOOGLE_CHROME_BIN,
@@ -15,7 +17,6 @@ async function scrapeFollowerCount(url) {
         // Navigate to the URL
         console.log("Navigating to url");
         await page.goto(url, { waitUntil: 'networkidle0' }); 
-        let followerCount = "";
       
         let links = await page.$$('a');
         console.log("links fetched");
@@ -35,12 +36,13 @@ async function scrapeFollowerCount(url) {
               foundFoll = true;
               followerCount = iC;
               console.log(url, "Follower count determined as: ", followerCount);
-            } else {
-                console.log(url, "Follower count not found in pass #",follCheckAudit);
-                follCheckAudit+=1;
-                if(follCheckAudit == 5) {
-                    console.log("Giving up on finding followers for ", url, " need to implement flag here and switch to hourly pulls?")
-                }
+            } 
+        }
+        if (!foundFoll) {
+            console.log(url, "Follower count not found in pass #",follCheckAudit);
+            follCheckAudit+=1;
+            if(follCheckAudit == 5) {
+                console.log("Giving up on finding followers for ", url, " need to implement flag here and switch to hourly pulls?")
             }
         }
     
