@@ -982,7 +982,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
        while (runStatus !== 'completed') {
            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
    
-           const run = await openai.beta.threads.runs.get(threadId, runId );
+           const run = await openai.beta.threads.runs.retrieve(threadId, runId );
            runStatus = run.status;
            
            console.log(`Run status: ${runStatus}`);
