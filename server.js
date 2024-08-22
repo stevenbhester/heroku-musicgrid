@@ -1029,8 +1029,18 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     }
 
     const responseMessages = await runThread(questAsked, threadId, 'asst_Y5rS18YInoTu350lp5G4r1uY');
-    const latestResponse = responseMessages.data[0].content[0].text.value;
+    const allMsgObjs = responseMessages.data;
+    let allMsgsTxt = [];
+    for( msgObj in allMsgObjs) {
+      let allcontObjs = msgObj.content;
+      for( contObj in allContObjs) {
+          allMsgsText.push(contObj.text);
+      }
+    }
+    const latestResponse = allMsgsTxt[0];
     console.dir(responseMessages);
+    console.dir(allMsgObjs);
+    console.dir(allMsgsTx);
     console.log(latestResponse);
     return res.json({ msg: latestResponse, threadId: threadId });
   } catch (error) {
