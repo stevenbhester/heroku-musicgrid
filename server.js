@@ -1016,9 +1016,9 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
         const threadObj = await createThread(userInput);
         threadId = threadObj.id;
      }
-    else {
-       const responseMessages = await runThread(questAsked, threadId);
-    }
+    
+   const responseMessages = await runThread(questAsked, threadId);
+   const latestResponse = responseMessages[0];
    
-   return res.json(msg: responseMessages[0], threadId: threadId);
+   return res.json(msg: latestResponse , threadId: threadId);
 });
