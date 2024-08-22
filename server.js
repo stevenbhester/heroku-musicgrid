@@ -1044,13 +1044,15 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     const allMsgObjs = responseMessages.data;
     let allMsgsTxt = [];
     console.log('created AllMsgObjs, empty array for AllMsgsTxt setup. AllMsgObjs len is: '+allMsgObjs.length);
+    console.log('first MsgObj is:');
+     console.dir(allMsgObjs[0]);
     for( const msgObj in allMsgObjs) {
       console.log('Msgobj 1 below:');
        console.dir(msgObj);
       let allContObjs = msgObj.content;
       console.log('creating allContObjs for first message obj, see output below');
       console.dir(allContObjs);
-       console.log('iterating through AllContObjs w/ len: '+allContObjs.length);
+       // console.log('iterating through AllContObjs w/ len: '+allContObjs.length);
       for( var contObj in allContObjs) {
           console.log('Outputting next contObj below');
           console.dir(contObj);
