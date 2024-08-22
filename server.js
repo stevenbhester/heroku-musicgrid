@@ -966,3 +966,47 @@ app.post('/fetch-ai-gridname', async (req, res) => {
         res.json(fallback); // Default name
     }
 });
+app.post('/fetch-ai-weddingresponse', async (req, res) => {
+    try {
+        const questAsked = req.body.question;
+        console.log("Generating AI response to: ",questAsked);
+        const aiBody = {
+           model: "gpt-4-turbo-preview",
+           messages: [
+              {
+                 role: "user",
+                 content: `Your job is to help wedding guests find out answers to their questions about the wedding. Guests will ask you questions instead of the bride, and you must reply with accurate data where you can find it. Do not hallucinate - just say you cannot find data if you are not fully confident.  All your data will come from what is available on this website: https://www.theknot.com/us/allyson-talpash-and-andrew-hilger-aug-2024 and the related sections/tabs. The question you are answering is:  ${questAsked}`
+              }
+           ],
+           temperature: 0.6
+        };
+        console.log("Body for request to OpenAI:");
+        console.log(aiBody);       
+        const aiHeaders = {
+           'Authorization': `Bearer ${OPENAI_SECRET}`,
+           'Content-Type': 'application/json'
+         };
+        console.log("Headers for request to OpenAI:");
+        console.log(aiHeaders);
+        console.log("Submitting request");
+        const response = await axios.post(
+            'https://api.openai.com/v1/chat/completions',aiBody,
+            {
+                headers: aiHeaders
+            }
+        );
+       
+        console.log("Response received:");
+        console.log(response);
+        console.log("Parsed relevant response data is:");
+        console.log(response.data.choices[0]);
+        console.log("More specifically: ");
+        console.log(response.data.choices[0].message.content.trim());
+        res.json(response.data.choices[0]);
+    } catch (error) {
+        console.log("Error hit! ", error);
+        console.error(`Error generating music grid name: ${error.message}`);
+        let fallback = { message: { content: "AI Failure Fallback Response" } }
+        res.json(fallback); // Default name
+    }
+});
