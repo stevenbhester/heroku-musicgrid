@@ -1034,13 +1034,13 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     for( msgObj in allMsgObjs) {
       let allContObjs = msgObj.content;
       for( contObj in allContObjs) {
-          allMsgsText.push(contObj.text);
+          allMsgsTxt.push(contObj.text);
       }
     }
     const latestResponse = allMsgsTxt[0];
     console.dir(responseMessages);
     console.dir(allMsgObjs);
-    console.dir(allMsgsTx);
+    console.dir(allMsgsTxt);
     console.log(latestResponse);
     return res.json({ msg: latestResponse, threadId: threadId });
   } catch (error) {
