@@ -3,6 +3,7 @@ const { Pool } = require('pg');
 const axios = require('axios');
 const cors = require('cors');
 const app = express();
+const { OpenAI } = require('openai');
 
 app.use(express.json());
 const corsOptions ={
@@ -968,10 +969,9 @@ app.post('/fetch-ai-gridname', async (req, res) => {
 });
 
 app.post('/fetch-ai-weddingresponse', async (req, res) => {
-  const { OpenAI } = require('openai');
-
+  
   const openai = new OpenAI({
-    apiKey: OPENAI_SECRET,  
+    apiKey: process.env.OPENAI_API_KEY,  
   });
 
   const wedding_assistant_id = 'asst_Y5rS18YInoTu350lp5G4r1uY';
@@ -979,7 +979,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 
   async function createThread() {
     try {
-      const thread = await openai.threads.create();
+      const thread = await openai.beta.threads.create();
       return thread;  
     } catch (error) {
       console.error('Error creating thread: ', error);
