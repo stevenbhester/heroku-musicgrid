@@ -982,7 +982,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
        while (runStatus !== 'completed') {
            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
    
-           const run = await openai.threads.runs.get(threadId, runId );
+           const run = await openai.beta.threads.runs.get(threadId, runId );
            runStatus = run.status;
            
            console.log(`Run status: ${runStatus}`);
@@ -1021,7 +1021,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
       {
         assistant_id: wedding_assistant_id,
       });
-       
+       console.log('waiting for compleition of run id: '+run.id);
       await waitForRunCompletion(run.id, threadId);
       console.log("run return below");
        // console.dir(runr);
