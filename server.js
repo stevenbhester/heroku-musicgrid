@@ -1046,20 +1046,20 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     console.log('created AllMsgObjs, empty array for AllMsgsTxt setup. AllMsgObjs len is: '+allMsgObjs.length);
     console.log('first MsgObj is:');
      console.dir(allMsgObjs[0]);
-    for( const msgObj in allMsgObjs) {
+    allMsgObjs.forEach((msgObj) => {
       console.log('Msgobj 1 below:');
        console.dir(msgObj);
       let allContObjs = msgObj.content;
       console.log('creating allContObjs for first message obj, see output below');
       console.dir(allContObjs);
        // console.log('iterating through AllContObjs w/ len: '+allContObjs.length);
-      for( var contObj in allContObjs) {
+      allContObjs.forEach((contObj) => {
           console.log('Outputting next contObj below');
           console.dir(contObj);
           console.log('adding '+contObj.text.value+' to arr');
           allMsgsTxt.push(contObj.text.value);
-      }
-    }
+      });
+    });
     const latestResponse = allMsgsTxt[0];
     console.dir(responseMessages);
     console.dir(allMsgObjs);
