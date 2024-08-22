@@ -1044,6 +1044,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     console.log(latestResponse);
     return res.json({ msg: latestResponse, threadId: threadId });
   } catch (error) {
+     console.log(error);
     return res.status(500).json({ error: 'An error occurred while processing your request.' });
   }
 });
