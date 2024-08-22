@@ -969,7 +969,7 @@ app.post('/fetch-ai-gridname', async (req, res) => {
 });
 
 app.post('/fetch-ai-weddingresponse', async (req, res) => {
-  
+  console.log('initializing wedding response');
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,  
   });
@@ -978,6 +978,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 
   async function createThread() {
     try {
+      console.log('creating thread!!!');
       const thread = await openai.beta.threads.create();
       return thread;  
     } catch (error) {
@@ -989,13 +990,14 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 
   async function runThread(questAsked, threadId, wedding_assistant_id) {
     try {
+       console.log('creating message with new question');
       await openai.beta.threads.messages.create(
       threadId,
       {
         role: 'user',
         content: questAsked,
       });
-
+      console.log('creating run with wedding assistant');
 
       await openai.beta.threads.runs.create(
         threadId,
@@ -1003,7 +1005,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
         assistant_id: wedding_assistant_id,
       });
 
-
+      console.log('pulling back messages and returning');
       const messages = await openai.beta.threads.messages.list(
          threadId,
       {
@@ -1023,18 +1025,26 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
   let threadId = req.body.threadId;
 
   try {
+     console.log('checking if thread already exists');
     if (!threadExistsBool) {
+       console.log('it doesnt - making new one');
       const threadObj = await createThread();
       threadId = threadObj.id;
+       console.log('new one created, id: '+threadId);
     }
-
+    console.log('asking question to thread through runThread()');
     const responseMessages = await runThread(questAsked, threadId, 'asst_Y5rS18YInoTu350lp5G4r1uY');
+    console.log('storing messages!');
     const allMsgObjs = responseMessages.data;
     let allMsgsTxt = [];
+    console.log('created AllMsgObjs, empty array for AllMsgsTxt setup. AllMsgObjs len is: '+allMsgObjs.length);
     for( var msgObj in allMsgObjs) {
       let allContObjs = msgObj.content;
+      console.log('creating allContObjs for first message obj, see output below');
       console.dir(allContObjs);
+       console.log('iterating through AllContObjs w/ len: '+allContObjs.length);
       for( var contObj in allContObjs) {
+          console.log('Outputting next contObj below');
           console.dir(contObj);
           console.log('adding '+contObj.text.value+' to arr');
           allMsgsTxt.push(contObj.text.value);
@@ -1045,6 +1055,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     console.dir(allMsgObjs);
     console.dir(allMsgsTxt);
     console.log(latestResponse);
+     console.log(returning);
     return res.json({ msg: latestResponse, threadId: threadId });
   } catch (error) {
      console.log(error);
