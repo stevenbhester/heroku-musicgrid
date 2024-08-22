@@ -974,7 +974,20 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     apiKey: process.env.OPENAI_API_KEY,  
   });
 
-
+   const POLL_INTERVAL = 500; 
+   
+   async function waitForRunCompletion(runId, threadId) {
+       let runStatus = 'queued';
+       
+       while (runStatus !== 'completed') {
+           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+   
+           const run = await openai.threads.runs.get(threadId, runId });
+           runStatus = run.status;
+           
+           console.log(`Run status: ${runStatus}`);
+       }
+   }
 
   async function createThread() {
     try {
@@ -999,17 +1012,19 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
       });
       
       console.log("msg create return below");
-       console.dir(mcr);
+       // console.dir(mcr);
        
       console.log('creating run with wedding assistant');
 
-      let runr = await openai.beta.threads.runs.create(
+      const run = await openai.beta.threads.runs.create(
         threadId,
       {
         assistant_id: wedding_assistant_id,
       });
+       
+      await waitForRunCompletion(run.id, threadId);
       console.log("run return below");
-       console.dir(runr);
+       // console.dir(runr);
 
       console.log('pulling back messages and returning');
       const messages = await openai.beta.threads.messages.list(
@@ -1046,8 +1061,10 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     console.log('created AllMsgObjs, empty array for AllMsgsTxt setup. AllMsgObjs len is: '+allMsgObjs.length);
     console.log('first MsgObj is:');
      console.dir(allMsgObjs[0]);
+     let numobjs = 0;
     allMsgObjs.forEach((msgObj) => {
-      console.log('Msgobj 1 below:');
+      console.log('Msgobj '+numobjs+' below:');
+       numobjs+=1;
        console.dir(msgObj);
       let allContObjs = msgObj.content;
       console.log('creating allContObjs for first message obj, see output below');
