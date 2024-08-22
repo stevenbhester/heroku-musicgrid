@@ -1034,7 +1034,9 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     for( msgObj in allMsgObjs) {
       let allContObjs = msgObj.content;
       for( contObj in allContObjs) {
-          allMsgsTxt.push(contObj.text);
+          console.dir(contObj);
+          console.log('adding '+contObj.text.value+' to arr');
+          allMsgsTxt.push(contObj.text.value);
       }
     }
     const latestResponse = allMsgsTxt[0];
