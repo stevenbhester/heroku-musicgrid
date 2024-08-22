@@ -1065,7 +1065,6 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     console.dir(allMsgObjs);
     console.dir(allMsgsTxt);
     console.log(latestResponse);
-     console.log(returning);
     return res.json({ msg: latestResponse, threadId: threadId });
   } catch (error) {
      console.log(error);
