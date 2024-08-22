@@ -990,9 +990,9 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 
   async function runThread(questAsked, threadId) {
     try {
-
-      await openai.beta.threads.messages.create({
-        thread_id: threadId,
+      await openai.beta.threads.messages.create(
+      threadId,
+      {
         role: 'user',
         content: questAsked,
       });
