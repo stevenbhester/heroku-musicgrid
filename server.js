@@ -974,7 +974,6 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     apiKey: process.env.OPENAI_API_KEY,  
   });
 
-  const wedding_assistant_id = 'asst_Y5rS18YInoTu350lp5G4r1uY';
 
 
   async function createThread() {
@@ -988,7 +987,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
   }
 
 
-  async function runThread(questAsked, threadId) {
+  async function runThread(questAsked, threadId, wedding_assistant_id) {
     try {
       await openai.beta.threads.messages.create(
       threadId,
@@ -1029,7 +1028,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
       threadId = threadObj.id;
     }
 
-    const responseMessages = await runThread(questAsked, threadId);
+    const responseMessages = await runThread(questAsked, threadId, 'asst_Y5rS18YInoTu350lp5G4r1uY');
     const latestResponse = responseMessages[0];
 
     return res.json({ msg: latestResponse, threadId: threadId });
