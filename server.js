@@ -966,59 +966,72 @@ app.post('/fetch-ai-gridname', async (req, res) => {
         res.json(fallback); // Default name
     }
 });
+
 app.post('/fetch-ai-weddingresponse', async (req, res) => {
-      const { OpenAI } = require('openai');
-      
-      const openai = new OpenAI({
-         apiKey: OPENAI_SECRET,  
+  const { OpenAI } = require('openai');
+
+  const openai = new OpenAI({
+    apiKey: OPENAI_SECRET,  
+  });
+
+  const wedding_assistant_id = 'asst_Y5rS18YInoTu350lp5G4r1uY';
+
+
+  async function createThread() {
+    try {
+      const thread = await openai.threads.create();
+      return thread;  
+    } catch (error) {
+      console.error('Error creating thread: ', error);
+      throw error;  
+    }
+  }
+
+
+  async function runThread(questAsked, threadId) {
+    try {
+
+      await openai.threads.messages.create({
+        thread_id: threadId,
+        role: 'user',
+        content: questAsked,
       });
-      
-      const wedding_assistant_id = 'asst_Y5rS18YInoTu350lp5G4r1uY';
-      
-      async function createThread() {
-        try {
-          const thread = await openai.threads.create();
-        } catch (error) {
-          console.error('Error creating thread: ', error);
-        }
-      }
 
-      async function runThread(questAsked, threadId) {
-         try {
-             await openai.threads.messages.create({
-               thread_id: threadId,
-               role: 'user',
-               content: questAsked,
-             });
-         
-             const run = await openai.threads.runs.create({
-               thread_id: threadId,
-               assistant_id: wedding_assistant_id,
-             });
-         
-             const messages = await openai.threads.messages.list({
-               thread_id: threadId,
-               order: 'desc',
-             });
 
-             return messages;
-         }
-         catch (error) {
-            console.error('Error running thread: ', error);
-         }
-      }
-      
-     const questAsked = req.body.question;
-     const threadExistsBool = req.body.threadExists;
-     var threadId = req.body.threadId;
-     
-     if (!threadExistsBool) {
-        const threadObj = await createThread(userInput);
-        threadId = threadObj.id;
-     }
-    
-   const responseMessages = await runThread(questAsked, threadId);
-   const latestResponse = responseMessages[0];
-   
-   return res.json(msg: latestResponse , threadId: threadId);
+      await openai.threads.runs.create({
+        thread_id: threadId,
+        assistant_id: wedding_assistant_id,
+      });
+
+
+      const messages = await openai.threads.messages.list({
+        thread_id: threadId,
+        order: 'desc',
+      });
+
+      return messages;
+    } catch (error) {
+      console.error('Error running thread: ', error);
+      throw error;  
+    }
+  }
+
+
+  const questAsked = req.body.question;
+  const threadExistsBool = req.body.threadExists;
+  let threadId = req.body.threadId;
+
+  try {
+    if (!threadExistsBool) {
+      const threadObj = await createThread();
+      threadId = threadObj.id;
+    }
+
+    const responseMessages = await runThread(questAsked, threadId);
+    const latestResponse = responseMessages[0];
+
+    return res.json({ msg: latestResponse, threadId: threadId });
+  } catch (error) {
+    return res.status(500).json({ error: 'An error occurred while processing your request.' });
+  }
 });
