@@ -1033,6 +1033,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     let allMsgsTxt = [];
     for( msgObj in allMsgObjs) {
       let allContObjs = msgObj.content;
+      console.dir(allContObjs);
       for( contObj in allContObjs) {
           console.dir(contObj);
           console.log('adding '+contObj.text.value+' to arr');
