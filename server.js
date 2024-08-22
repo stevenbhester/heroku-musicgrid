@@ -979,7 +979,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
    async function waitForRunCompletion(runId, threadId) {
        let runStatus = 'queued';
        
-       while (runStatus !== 'completed') {
+       while (runStatus !== 'completed' && runStatus !=== 'failed') {
            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
    
            const run = await openai.beta.threads.runs.retrieve(threadId, runId );
