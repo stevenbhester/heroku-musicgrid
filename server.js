@@ -991,19 +991,25 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
   async function runThread(questAsked, threadId, wedding_assistant_id) {
     try {
        console.log('creating message with new question /'+questAsked+'/ for assistant '+wedding_assistant_id);
-      console.dir(await openai.beta.threads.messages.create(
+      let mcr = console.dir(await openai.beta.threads.messages.create(
       threadId,
       {
         role: 'user',
         content: questAsked,
-      }););
+      });
+      
+      console.log("msg create return below");
+       console.dir(mcr);
+       
       console.log('creating run with wedding assistant');
 
-      console.dir(await openai.beta.threads.runs.create(
+      let runr = await openai.beta.threads.runs.create(
         threadId,
       {
         assistant_id: wedding_assistant_id,
-      }););
+      });
+      console.log("run return below");
+       console.dir(runr);
 
       console.log('pulling back messages and returning');
       const messages = await openai.beta.threads.messages.list(
