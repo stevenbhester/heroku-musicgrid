@@ -1032,7 +1032,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     const allMsgObjs = responseMessages.data;
     let allMsgsTxt = [];
     for( msgObj in allMsgObjs) {
-      let allcontObjs = msgObj.content;
+      let allContObjs = msgObj.content;
       for( contObj in allContObjs) {
           allMsgsText.push(contObj.text);
       }
