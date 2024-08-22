@@ -1031,10 +1031,10 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
     const responseMessages = await runThread(questAsked, threadId, 'asst_Y5rS18YInoTu350lp5G4r1uY');
     const allMsgObjs = responseMessages.data;
     let allMsgsTxt = [];
-    for( msgObj in allMsgObjs) {
+    for( var msgObj in allMsgObjs) {
       let allContObjs = msgObj.content;
       console.dir(allContObjs);
-      for( contObj in allContObjs) {
+      for( var contObj in allContObjs) {
           console.dir(contObj);
           console.log('adding '+contObj.text.value+' to arr');
           allMsgsTxt.push(contObj.text.value);
