@@ -5,6 +5,7 @@ const cors = require('cors');
 const app = express();
 const { OpenAI } = require('openai');
 
+
 app.use(express.json());
 const corsOptions ={
    origin:'*',
