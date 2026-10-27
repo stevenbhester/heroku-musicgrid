@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>musicgrid.io game of royalty</title>
+    <link rel="icon" type="image/x-icon" href="/img/favicon.png">
+    <script src="/js/adminCode.js?v=20261027"></script>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+/*             background-image: url('/img/bgimg.png'); */
+            background-color: #669DB3;
+            color: #333;
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            height: 100vh;
+            flex-direction: column;
+        }
+
+        .header {
+            background-color: #1B4F72;
+            color: #C5C6D0;
+            padding: 10px 20px;
+            padding-bottom: 20px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .header-2 {
+            background-color: #FFFAD5;
+            color: #333;
+            padding: 10px 20px;
+            padding-bottom: 20px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .title {
+            font-size: 2.5em;
+            margin: 0;
+        }
+
+        .subheader {
+            font-size: 1.2em;
+            margin-top: 10px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 95%;
+            max-width: 1600px;
+            margin: 10px auto;
+            padding: 10px;
+        }
+
+        .row {
+            display: flex;
+            width: 100%;
+            position: relative;
+        }
+
+        .cell {
+            flex: 1;
+            padding: 15px 20px;
+            text-align: center;
+            font-size: 1.5em;
+            min-height: 50px;
+            background-color: #e3f2fd;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            word-break: break-word;
+        }
+
+        .summCellLong {
+            flex: 1;
+            padding: 5px 7px;
+            text-align: center;
+            font-size: 0.9em;
+            min-height: 50px;
+            background-color: #e3f2fd;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            word-break: break-word;
+        }
+        
+        .genre-header, .artist, .cellheader {
+            background-color: #bbdefb;
+        }
+
+        .invisible {
+            visibility: hidden;
+        }
+
+        .results-dropdown div:hover {
+            background-color: #f0f0f0;
+        }
+        .results-dropdown {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            position: absolute;
+            width: calc(100% - 20px); /* adjust width as needed */
+            z-index: 1000;
+            top: 100%; /* make sure it starts right after the input field */
+            left: 0; /* align to the left edge of the input field */
+            margin-top: 1px; /* add a little space below the input field */
+        }
+
+        #shareButton {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .results-dropdown div {
+            padding: 5px; /* add more padding for spacing between results */
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0; /* add a subtle line between each result */
+        }
+
+        .results-dropdown div:last-child {
+            border-bottom: none; /* no border for the last item */
+        }
+
+        /* Style for the song title to be bold */
+        .song-title {
+            font-weight: bold;
+        }
+
+        input[type="button"] {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            box-sizing: border-box;
+        }
+        
+        @media (max-width: 600px) {
+            .cell, .genre-header, .artist {
+                font-size: 14px; /* Adjust base font size */
+                word-wrap: break-word; /* Ensures words wrap and don't overflow */
+                padding: 1px 1px;
+            }
+        
+            .results-dropdown {
+                width: 100%;
+                box-sizing: border-box;
+                top: 100%;
+            }
+        
+            .results-dropdown div {
+                padding: 5px;
+            }
+        
+            .song-cell {
+                position: relative;
+                font-size: 3.5vw; /* Adjust base font size */
+                word-wrap: break-word; /* Ensures words wrap and don't overflow */
+                padding: 1px 1px;
+            }
+
+            .grid-data-cell {
+                position: relative;
+                font-size: 3.5vw; /* Adjust base font size */
+                word-wrap: break-word; /* Ensures words wrap and don't overflow */
+                padding: 1px 1px;
+            }
+        }
+        .admin-tools { width: 95%; max-width: 1100px; margin: 10px auto; padding: 16px 20px; background: #FFFAD5; border-radius: 4px; }
+        .admin-tools h2 { margin: 18px 0 6px; font-size: 1.2em; }
+        .tool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+        .tool-note { margin: 0 0 8px; font-size: 0.9em; color: #555; }
+        .cal-row { padding: 4px 0; border-bottom: 1px solid #e6dfa8; font-size: 0.95em; }
+        .cal-repeat { color: #8a8460; }
+        #data-dump { display: block; overflow-x: auto; flex-shrink: 0; }
+        .admin-tools { flex-shrink: 0; }
+        #data-dump .row { min-width: 1500px; }
+        #data-dump .cell { font-size: 1em; padding: 10px 8px; }
+        #data-dump input[type=date] { margin-right: 6px; }
+        #toolOutput { white-space: pre-wrap; background: #fff; padding: 8px; border-radius: 4px; min-height: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">musicgrid.io Administration</div>
+        <br>
+    </div>
+    <br>
+    <div class="admin-tools">
+        <div class="tool-row">
+            <label>Admin key <input type="password" id="adminKey" placeholder="ADMIN_KEY from Heroku config vars" autocomplete="off"></label>
+            <button type="button" id="saveKey">Save key</button>
+            <span id="keyNote"></span>
+        </div>
+        <h2>Next three weeks</h2>
+        <p class="tool-note">Each day plays the grid with the latest date on or before it. Faded days repeat an earlier grid, so schedule something for them.</p>
+        <div id="calendar">Loading…</div>
+        <h2>Cleanups</h2>
+        <div class="tool-row">
+            <button type="button" id="retitleBtn">Retitle custom grids with broken titles</button>
+            <button type="button" id="screenBtn">Screen existing leaderboard names</button>
+        </div>
+        <pre id="toolOutput"></pre>
+        <h2>Renamed leaderboard names</h2>
+        <div id="modLog">Loading…</div>
+    </div>
+    <!-- Grid list data field headers -->
+    <div class="container" id="data-dump">
+    </div>
+    <br>
+    <br>
+  
+    <div class="container" id="grid-container">
+        <!-- Artists Row -->
+        <div class="row">
+            <div class="cell invisible"></div>
+            <div class="cell artist">A1</div>
+            <div class="cell artist">A2</div>
+            <div class="cell artist">A3</div>
+        </div>
+    
+        <!-- Category 1: Songs Released in the 2010s -->
+        <div class="row">
+            <div class="cell genre-header">C1</div>
+            <div class="cell song-cell">
+                "A1C1"
+            </div>
+            <div class="cell song-cell">
+                "A2C1"
+            </div>
+            <div class="cell song-cell">
+                "A3C1"
+            </div>
+        </div>
+    
+    
+        <!-- Category 2: Charted Above Top 5 in the Billboard 100 -->
+        <div class="row">
+            <div class="cell genre-header">C2</div>
+            <div class="cell song-cell">
+                "A1C2"
+            </div>
+            <div class="cell song-cell">
+                "A2C2"
+            </div>
+            <div class="cell song-cell">
+                "A3C2"
+            </div>
+        </div>
+    
+    
+        <!-- Category 3: Songs That Won Song of the Year at the Grammy Awards -->
+        <div class="row">
+            <div class="cell genre-header">C3</div>
+            <div class="cell song-cell">
+                "A1C3"
+            </div>
+            <div class="cell song-cell">
+               "A2C3"
+            </div>
+            <div class="cell song-cell">
+                "A3C3"
+            </div>
+        </div>
+    </div>
+</body>
+</html>

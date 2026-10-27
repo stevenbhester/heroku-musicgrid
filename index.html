@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MusicGrid | The daily music trivia grid</title>
+  <meta name="description" content="A daily music trivia game. Name a song for every square that fits both its artist and its category. Deeper cuts score more.">
+  <meta name="theme-color" content="#1e44b5">
+  <link rel="icon" type="image/png" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="preload" href="/fonts/archivo-latin.woff" as="font" type="font/woff" crossorigin>
+  <link rel="preconnect" href="https://music-grid-io-42616e204fd3.herokuapp.com" crossorigin>
+  <link rel="stylesheet" href="/css/mg.css?v=20261027">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://musicgrid.stevenhester.com/">
+  <meta property="og:title" content="MusicGrid">
+  <meta property="og:description" content="The daily music trivia grid. Name a song for every square. Deeper cuts score more.">
+  <meta property="og:image" content="https://musicgrid.stevenhester.com/img/og-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="MusicGrid">
+  <meta name="twitter:description" content="The daily music trivia grid. Name a song for every square. Deeper cuts score more.">
+  <meta name="twitter:image" content="https://musicgrid.stevenhester.com/img/og-card.png">
+</head>
+<body data-mode="daily">
+  <a class="skip" href="#board">Skip to the grid</a>
+
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/img/logo-96.png" width="32" height="33" alt="">MusicGrid</a>
+    <nav class="topnav" aria-label="Main">
+      <a href="/" aria-current="page">Daily grid</a>
+      <a href="/grid-builder/">Build a grid</a>
+    </nav>
+  </header>
+
+  <main class="game" id="main">
+    <section class="game-head">
+      <p class="grid-date" id="gridDate" hidden></p>
+      <h1 class="title" id="gridTitle">Today's grid</h1>
+      <p class="subtitle">Name a song for every square that fits both its artist and its category. Deeper cuts score more, up to 11 points a square.</p>
+    </section>
+
+    <section class="hud" aria-label="Game status">
+      <div class="hud-score">
+        <span class="hud-num" id="score">1</span>
+        <span class="hud-label" id="scoreLabel">point</span>
+      </div>
+      <div class="hud-lives">
+        <div class="lives" id="lives" role="img" aria-label="3 of 3 hearts left"></div>
+        <span class="sudden" id="sudden" hidden>Sudden death</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="easyMode">
+        <span class="toggle-track" aria-hidden="true"></span>
+        <span>Easy mode<span class="toggle-note">Adds a song hint to each square</span></span>
+      </label>
+    </section>
+
+    <section class="board-wrap" aria-label="The grid">
+      <div class="board" id="board" tabindex="-1"></div>
+      <p class="loading-note" id="loadingNote" hidden>Waking up the server. The first load can take a few seconds.</p>
+      <div class="board-actions">
+        <button class="btn-ghost" type="button" id="giveUp">Give up</button>
+      </div>
+    </section>
+
+    <section class="results card" id="results" aria-labelledby="resultsTitle" hidden>
+      <h2 id="resultsTitle">Game over</h2>
+      <div class="final-score"><b id="finalScore">1</b><span>points</span></div>
+      <p class="summary" id="summary"></p>
+      <div class="mini" id="mini" aria-hidden="true"></div>
+      <div class="results-actions">
+        <button class="btn" type="button" id="shareBtn">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>
+          Share results
+        </button>
+        <a class="btn-ghost" href="/grid-builder/">Build your own grid</a>
+      </div>
+      <form class="submit-form" id="submitForm" novalidate>
+        <label for="playerName">Add your score to the leaderboard</label>
+        <div class="field-row">
+          <input class="field" id="playerName" name="name" maxlength="24" autocomplete="nickname" placeholder="Your name">
+          <button class="btn btn-ink" type="submit" id="submitBtn">Submit score</button>
+        </div>
+        <p class="form-note" id="submitNote" aria-live="polite"></p>
+      </form>
+      <p class="form-note" id="submitDone" hidden>Your score is on the leaderboard.</p>
+    </section>
+
+    <aside class="side">
+      <section class="card" aria-labelledby="lbTitle">
+        <div class="lb-head"><h2 id="lbTitle">Today</h2><span class="lb-count" id="lbCount"></span></div>
+        <p class="empty-note" id="leaderboardNote">Loading scores…</p>
+        <div class="lb-scroll"><ol class="board-list" id="leaderboardList"></ol></div>
+      </section>
+      <section class="card" id="allTimeCard" aria-labelledby="atTitle">
+        <div class="lb-head"><h2 id="atTitle">All-time</h2><span class="lb-count" id="atCount"></span></div>
+        <p class="lb-sub">Each player's best score on every daily grid, added up.</p>
+        <p class="empty-note" id="allTimeNote">Loading scores…</p>
+        <div class="lb-scroll"><ol class="board-list" id="allTimeList"></ol></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="foot">
+    MusicGrid is made by <a href="https://www.stevenhester.com">Steven Hester</a>. Song search by Spotify.
+  </footer>
+
+  <dialog class="sheet" id="guessSheet" aria-labelledby="sheetArtist">
+    <div class="sheet-inner">
+      <div class="sheet-head">
+        <div class="sheet-title">
+          <b id="sheetArtist"></b>
+          <span id="sheetCategory"></span>
+        </div>
+        <button class="close" type="button" id="closeSheet" aria-label="Close">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="search">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="guessInput" type="text" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Song title" aria-label="Song title" aria-describedby="sheetMsg">
+      </div>
+      <div class="hint-row" id="hintRow" hidden>
+        <button class="btn-ghost" type="button" id="hintBtn"></button>
+        <p id="hintNote"></p>
+      </div>
+      <div class="sheet-body">
+        <p class="sheet-msg" id="sheetMsg" aria-live="polite"></p>
+        <p class="tried" id="tried" hidden></p>
+        <ul class="results-list" id="resultsList" aria-label="Search results"></ul>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="sr-only" id="announcer" aria-live="assertive"></div>
+
+  <script type="module" src="/js/grid-game.js?v=20261027"></script>
+</body>
+</html>
