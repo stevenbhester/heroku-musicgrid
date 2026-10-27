@@ -27,17 +27,137 @@ const pool = new Pool({
 });
 
 
+// Spotify app (client credentials) tokens last an hour, so reuse one
+// instead of requesting a fresh token on every call.
+let cachedSpotifyToken = null;
+let cachedSpotifyTokenExpires = 0;
+
 // Function to get Spotify access token
 async function getSpotifyAccessToken() {
+    if (cachedSpotifyToken && Date.now() < cachedSpotifyTokenExpires) {
+        return cachedSpotifyToken;
+    }
     const tokenResponse = await axios.post('https://accounts.spotify.com/api/token', 'grant_type=client_credentials', {
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')
         }
     });
-
-    return tokenResponse.data.access_token;
+    cachedSpotifyToken = tokenResponse.data.access_token;
+    cachedSpotifyTokenExpires = Date.now() + ((tokenResponse.data.expires_in || 3600) - 60) * 1000;
+    return cachedSpotifyToken;
 }
+
+// Since February 2026, Development Mode apps get a 400 ("Invalid limit") for
+// any limit above 10 on Search and on Get Artist's Albums, so page by 10.
+const SPOTIFY_PAGE_LIMIT = 10;
+const MAX_ARTIST_ALBUMS = 50;
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// GET a Spotify Web API URL with the app token. Retries once on an expired
+// token and briefly on rate limits (429), then gives up.
+async function spotifyGet(url, attempt = 0) {
+    const accessToken = await getSpotifyAccessToken();
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+        return response.data;
+    } catch (error) {
+        const status = error.response ? error.response.status : null;
+        if (status === 401 && attempt === 0) {
+            cachedSpotifyToken = null;
+            return spotifyGet(url, attempt + 1);
+        }
+        if (status === 429 && attempt < 2) {
+            const retryAfter = Number(error.response.headers['retry-after']) || 1;
+            await sleep(Math.min(retryAfter, 10) * 1000);
+            return spotifyGet(url, attempt + 1);
+        }
+        throw error;
+    }
+}
+
+// Smallest artist image that's still sharp in a 44px circle, or null.
+function pickArtistImage(images) {
+    const sorted = (images || []).filter(image => image && image.url).sort((a, b) => (a.width || 0) - (b.width || 0));
+    const sharp = sorted.find(image => (image.width || 0) >= 120);
+    return sharp ? sharp.url : (sorted.length ? sorted[sorted.length - 1].url : null);
+}
+
+const normalizeTitle = text => String(text || '').toLowerCase().trim().replace(/\s|'/g, '');
+
+// Development Mode apps no longer receive track popularity (February 2026).
+// Spotify orders an artist-filtered track search roughly by popularity, so a
+// song's position in the artist's top 100 results stands in for it. Songs
+// outside the top 100 count as deep cuts. Rankings are cached per artist.
+const artistRankCache = new Map();
+const ARTIST_RANK_PAGES = 10;
+const ARTIST_RANK_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function artistTrackRanks(artistName) {
+    const key = artistName.toLowerCase().trim();
+    const cached = artistRankCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+        return cached.ranks;
+    }
+    const ranks = new Map();
+    const query = encodeURIComponent(`artist:"${artistName}"`);
+    for (let page = 0; page < ARTIST_RANK_PAGES; page++) {
+        const data = await spotifyGet(`https://api.spotify.com/v1/search?q=${query}&type=track&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${page * SPOTIFY_PAGE_LIMIT}`);
+        const items = data.tracks.items;
+        items.forEach((song, index) => {
+            const name = normalizeTitle(song.name);
+            if (!ranks.has(name)) {
+                ranks.set(name, page * SPOTIFY_PAGE_LIMIT + index);
+            }
+        });
+        if (items.length < SPOTIFY_PAGE_LIMIT) {
+            break;
+        }
+    }
+    if (artistRankCache.size > 300) {
+        artistRankCache.delete(artistRankCache.keys().next().value);
+    }
+    artistRankCache.set(key, { ranks, expires: Date.now() + ARTIST_RANK_TTL_MS });
+    return ranks;
+}
+
+async function estimatePopularity(artistName, songName) {
+    try {
+        const ranks = await artistTrackRanks(artistName);
+        const rank = ranks.get(normalizeTitle(songName));
+        return rank === undefined ? 1 : Math.max(1, 100 - rank);
+    } catch (error) {
+        console.error('Could not estimate popularity: ', error.message);
+        return -1; // the client treats -1 as "score it the full 11 points"
+    }
+}
+
+// Search artists by name, for the "pick any artists" grid builder. Uses the
+// app token, so visitors don't need to connect their own Spotify account.
+app.post('/search-artists', async (req, res) => {
+    try {
+        const query = String(req.body.query || '').trim().slice(0, 100);
+        if (query.length < 2) {
+            return res.json([]);
+        }
+        const data = await spotifyGet(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=artist&market=US&limit=${SPOTIFY_PAGE_LIMIT}`);
+        const artists = data.artists.items.map(artist => ({
+            id: artist.id,
+            name: artist.name,
+            img: pickArtistImage(artist.images),
+            genres: (artist.genres || []).slice(0, 2)
+        }));
+        res.json(artists);
+    } catch (error) {
+        console.error('Error searching artists: ', error.message);
+        res.status(500).send('Error searching artists');
+    }
+});
 
 // Endpoint to search song guesses on Spotify
 app.post('/search', async (req, res) => {
@@ -88,75 +208,42 @@ app.post('/search', async (req, res) => {
 
 // Endpoint to search song answers on Spotify
 app.post('/search-encoding-answer', async (req, res) => {
-    const searchTerm = req.body.searchTerm;
+    const searchTerm = req.body.searchTerm || '';
     const encoderReq = req.body.encoderReq || false;
-    const easyModeBool = req.body.easyModeBool || false;
     const artistSearch = req.body.artistSearch || ``;
-    let limit = 10;
-    let searchResponse = {};
-    let searchTermAppend = `"${searchTerm}"`;
-    let artistSearchAppend = ``;
+    // The encoder used to ask for 50 results at once. Spotify now caps search
+    // at 10, so check up to three pages instead.
+    const pages = encoderReq ? 3 : 1;
+    const searchName = normalizeTitle(searchTerm);
+    const searchArtist = normalizeTitle(artistSearch);
+    let searchableSong = encodeURIComponent(`"${searchTerm}"`).replace(/\s|'/g,"%27");
+    let searchableArtist = artistSearch.length === 0 ? '' : encodeURIComponent(` artist:"${artistSearch}"`).replace(/\s|'/g,"%27");
 
     try {
-        const accessToken = await getSpotifyAccessToken();
-        
-        if(encoderReq) {
-            limit = 50;
-        }
-        searchTermAppend = `"${searchTerm}"`;
-        if(artistSearch.length === 0 || artistSearch === null) {
-            artistSearchAppend = ``;
-        } else {
-            artistSearchAppend = ` artist:"${artistSearch}"`;
-        }
-        let searchableSong = encodeURIComponent(searchTermAppend).replace(/\s|'/g,"%27");
-        let searchableArtist = encodeURIComponent(artistSearchAppend).replace(/\s|'/g,"%27");
-        console.log('Fetching from spotify:' + `https://api.spotify.com/v1/search?q=${searchableSong}${searchableArtist}&type=track&market=US&limit=${limit}`);
-        searchResponse = await axios.get(`https://api.spotify.com/v1/search?q=${searchableSong}${searchableArtist}&type=track&market=US&limit=${limit}`, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`
+        let match = null;
+        for (let page = 0; page < pages && !match; page++) {
+            const url = `https://api.spotify.com/v1/search?q=${searchableSong}${searchableArtist}&type=track&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${page * SPOTIFY_PAGE_LIMIT}`;
+            console.log('Fetching from spotify:' + url);
+            const data = await spotifyGet(url);
+            const items = data.tracks.items;
+            match = items.find(song => normalizeTitle(song.name) === searchName
+                && song.artists.some(artist => normalizeTitle(artist.name) === searchArtist)) || null;
+            if (items.length < SPOTIFY_PAGE_LIMIT) {
+                break;
             }
-        })
+        }
+
+        if (!match) {
+            return res.json({name: artistSearch, popularity: -1, preview_url: ''});
+        }
+        if (typeof match.popularity !== 'number') {
+            match.popularity = await estimatePopularity(artistSearch, match.name);
+        }
+        res.json(match);
     } catch (error) {
-        console.error('Error during search: ', error);
+        console.error('Error during encoding search: ', error.message);
         res.status(500).send('Error during search');
     }
-
-    console.log("Spotify returned "+searchResponse.data.tracks.total+" results to parse");
-    
-    let matchFound = false;
-    let fallbackObj = {};
-    searchResponse.data.tracks.items.forEach(song => {
-        if(!matchFound) {
-            let songMatch = false;
-            let artistMatch = false;
-            let resultName = song.name.toLowerCase().trim().replace(/\s|'/g, "");
-            let searchName = searchTerm.toLowerCase().trim().replace(/\s|'/g, "");
-            console.log(`Comparing name result:search of "${resultName}":"${searchName}"`);
-            if ( resultName == searchName ) {
-                songMatch = true;
-                console.log(`NAME MATCH FOUND FOR: ${searchName}!`);
-                song.artists.forEach(artist => {
-                    let resultArtist = artist.name.toLowerCase().trim().replace(/\s|'/g, "");
-                    let searchArtist = artistSearch.toLowerCase().trim().replace(/\s|'/g, "");
-                    console.log(`Comparing ARTIST result/search of "${resultArtist}"/"${searchArtist}"`);
-                    if( resultArtist == searchArtist ) {
-                        artistMatch = true;
-                        console.log(`!!!!!!!!NAME AND ARTIST MATCHED FOR "${resultName}"/"${searchName}" by "${resultArtist}"/"${searchArtist}"!!!!!!!!!!!`);
-                        matchFound = true;
-                        fallbackObj = song;
-                    }
-                });
-            }
-        }
-    });
-    if (Object.keys(fallbackObj).length == 0) {
-        const failState = {name: artistSearch, popularity: -1, preview_url: ''};
-        res.json(failState);
-    } else {
-        res.json(fallbackObj);
-    }
-    
 });
 
 // Endpoint to update leaderboard after game completion
@@ -737,20 +824,16 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
             songsByWordcountSumm[wordCount] = 0;
             songsByWordcountDetails[wordCount] = [];
         });
-        const accessToken = await getSpotifyAccessToken();
-
-
         console.log("Fetching /artists/artistId/albums for "+artistId);
-        console.log(`Postman - 'Authorization': 'Bearer ${accessToken}'`);
-        console.log(`Postman - https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`);
-        const albumList = await axios.get(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=50&albumOffset=${albumOffset}`, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`
-            }
-        });
-        totalAlbums = albumList.data.total;
+        // Page through up to 50 albums, 10 at a time (Spotify's current cap).
+        const albumItems = [];
+        for (albumOffset = 0; albumOffset < Math.min(totalAlbums, MAX_ARTIST_ALBUMS); albumOffset += SPOTIFY_PAGE_LIMIT) {
+            const albumPage = await spotifyGet(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${albumOffset}`);
+            totalAlbums = albumPage.total;
+            albumItems.push(...albumPage.items);
+        }
         console.log("Total albums now at:"+totalAlbums);
-        albumList.data.items.forEach(album => {
+        albumItems.forEach(album => {
             if(debug) {console.log("Checking album "+album.name);}
             //First we check if the album contains any banned words (filtering for alternate versions and remixes)
             let skip = false;
@@ -788,12 +871,8 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         for(let j = 0; j < albumArr.length; j+=1) {
             let albumId = albumArr[j];
             console.log("Fetching /albums/albumid/tracks for artist "+artistId+" album "+albumId);
-            const albumTrackList = await axios.get(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
-            totalAlbumTracks = albumTrackList.data.total;
+            const albumTrackList = { data: await spotifyGet(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=50&offset=${tracksOffset}`) };
+            let totalAlbumTracks = albumTrackList.data.total;
             albumTrackList.data.items.forEach(albumTrack => {
                 let skip = false;
                 bannedWords.forEach(word => {
@@ -803,8 +882,8 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
                     }
                 });
                 if(!skip) {
-                    lowestDurationFound = false;
-                    wordCountFound = false;
+                    let lowestDurationFound = false;
+                    let wordCountFound = false;
                     let currKeys = Object.keys(songsByReleaseDateSumm);
                     let currYear = albumsObj[albumId];
                     
