@@ -485,16 +485,130 @@ app.post('/schedule-grid', requireAdmin, async (req, res) => {
     }
 });
 
+// ===================================================================
+// Daily rotation
+// A day with no grid scheduled replays an older daily grid instead of
+// repeating yesterday's. The replay is a copy with its own grid id, so it
+// gets a fresh leaderboard and counts as a new day for players. The first
+// request after midnight (Central) makes the copy. Turn it off with
+// ROTATE_DAILY=off.
+// ===================================================================
+const ROTATE_DAILY = process.env.ROTATE_DAILY !== 'off';
+const RERUN_MIN_GAP_DAYS = Math.max(Number(process.env.RERUN_MIN_GAP_DAYS) || 30, 1);
+// After a check, skip the database for a while (the answer only changes at midnight)
+const ROTATION_RECHECK_MS = process.env.ROTATION_RECHECK_MS !== undefined ? Number(process.env.ROTATION_RECHECK_MS) : 10 * 60000;
+let rotationSchemaReady = false;
+let rotationCheckedFor = '';
+let rotationCheckedAt = 0;
+
+async function ensureRotationSchema() {
+    try {
+        await pool.query('ALTER TABLE musicgrid_templates ADD COLUMN IF NOT EXISTS rerun_of INTEGER');
+        await pool.query(`CREATE TABLE IF NOT EXISTS artist_clips (
+            name_key TEXT PRIMARY KEY, artist TEXT, has_clips BOOLEAN, source TEXT, checked_at TIMESTAMPTZ DEFAULT now())`);
+        rotationSchemaReady = true;
+        console.log('Rotation schema ready');
+    } catch (error) {
+        console.error('Could not set up daily rotation: ', error.message);
+    }
+}
+ensureRotationSchema();
+
+// Grids that already played, have answers for every square, and have no
+// artist known to lack song clips. Picks the one that played longest ago,
+// preferring ones that haven't played in RERUN_MIN_GAP_DAYS.
+const RERUN_PICK_SQL = `WITH g AS (
+        SELECT grid_id, COALESCE(MAX(rerun_of), grid_id) AS family, MAX(reporting_day) AS day,
+            COUNT(DISTINCT field) FILTER (WHERE field_type = 'Artist') AS artists,
+            COUNT(DISTINCT field) FILTER (WHERE field_type = 'Category') AS cats,
+            ARRAY_AGG(DISTINCT lower(trim(field_value))) FILTER (WHERE field_type = 'Artist') AS artist_keys
+        FROM musicgrid_templates GROUP BY grid_id
+    ), answered AS (
+        SELECT grid_id, COUNT(DISTINCT field) AS cells FROM musicgrid_answers GROUP BY grid_id
+    ), fam AS (
+        SELECT family, MAX(day) AS last_day FROM g GROUP BY family
+    ), ready AS (
+        SELECT DISTINCT ON (g.family) g.family, g.grid_id AS source, g.artist_keys
+        FROM g JOIN answered a ON a.grid_id = g.grid_id
+        WHERE g.artists > 0 AND g.cats > 0 AND a.cells >= g.artists * g.cats
+        ORDER BY g.family, g.grid_id DESC
+    )
+    SELECT r.family, r.source, to_char(f.last_day, 'YYYY-MM-DD') AS last_day
+    FROM ready r JOIN fam f ON f.family = r.family
+    WHERE f.last_day < ${TODAY_SQL}
+        AND NOT EXISTS (SELECT 1 FROM artist_clips c WHERE c.has_clips = FALSE AND c.name_key = ANY(r.artist_keys))
+    ORDER BY (f.last_day <= ${TODAY_SQL} - $1::int) DESC, f.last_day ASC, RANDOM()
+    LIMIT 1`;
+
+async function ensureTodaysGrid() {
+    if (!ROTATE_DAILY || !rotationSchemaReady) return null;
+    const today = (await pool.query(`SELECT to_char(${TODAY_SQL}, 'YYYY-MM-DD') AS d`)).rows[0].d;
+    if (rotationCheckedFor === today && Date.now() - rotationCheckedAt < ROTATION_RECHECK_MS) return null;
+    const markChecked = () => { rotationCheckedFor = today; rotationCheckedAt = Date.now(); };
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(724001)');
+        const scheduled = await client.query(`SELECT 1 FROM musicgrid_templates WHERE reporting_day = ${TODAY_SQL} LIMIT 1`);
+        if (scheduled.rows.length) {
+            await client.query('COMMIT');
+            markChecked();
+            return null;
+        }
+        const pick = await client.query(RERUN_PICK_SQL, [RERUN_MIN_GAP_DAYS]);
+        if (!pick.rows.length) {
+            await client.query('COMMIT');
+            markChecked();
+            return null;
+        }
+        const { family, source, last_day: lastDay } = pick.rows[0];
+        await client.query('LOCK TABLE musicgrid_templates IN EXCLUSIVE MODE');
+        const gridId = Number((await client.query('SELECT COALESCE(MAX(grid_id), 0) AS id FROM musicgrid_templates')).rows[0].id) + 1;
+        await client.query(`INSERT INTO musicgrid_templates (grid_id, field_type, field, field_value, create_date, reporting_day, is_live, rerun_of)
+            SELECT $1, field_type, field, field_value, ${TODAY_SQL}, ${TODAY_SQL}, FALSE, $2
+            FROM musicgrid_templates WHERE grid_id = $3`, [gridId, family, source]);
+        await client.query(`INSERT INTO musicgrid_answers (grid_id, field, song_name, popularity, normed_score, preview_url)
+            SELECT $1, field, song_name, popularity, normed_score, preview_url FROM musicgrid_answers WHERE grid_id = $2`, [gridId, source]);
+        await client.query('COMMIT');
+        markChecked();
+        console.log(`Nothing scheduled for ${today}: replaying grid ${family} (last played ${lastDay}) as grid ${gridId}`);
+        return gridId;
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('Daily rotation failed, the last grid repeats today: ', error.message);
+        return null;
+    } finally {
+        client.release();
+    }
+}
+
+// The first day each rerun family played, for "Rerun of the Oct 3 grid"
+async function firstDays(gridIds) {
+    if (!rotationSchemaReady || !gridIds.length) return new Map();
+    const { rows } = await pool.query(`WITH asked AS (
+            SELECT grid_id, MAX(rerun_of) AS family FROM musicgrid_templates
+            WHERE grid_id::text = ANY($1) GROUP BY grid_id HAVING MAX(rerun_of) IS NOT NULL
+        )
+        SELECT a.grid_id, to_char(MIN(t.reporting_day), 'YYYY-MM-DD') AS first_day
+        FROM asked a JOIN musicgrid_templates t ON (t.grid_id = a.family OR t.rerun_of = a.family)
+        GROUP BY a.grid_id`, [gridIds.map(String)]);
+    return new Map(rows.map(row => [String(row.grid_id), row.first_day]));
+}
+
 // Which grid plays on each day: the one with the latest reporting_day on
-// or before that day. Days with no grid of their own repeat the last one.
+// or before that day. With rotation on, an empty future day gets a rerun
+// picked at midnight (rerun: true).
 app.get('/grid-calendar', async (req, res) => {
     try {
+        await ensureTodaysGrid();
         const days = Math.min(Math.max(Number(req.query.days) || 21, 1), 90);
         const isAdmin = !ADMIN_KEY || req.get('x-admin-key') === ADMIN_KEY;
         const today = (await pool.query(`SELECT to_char(${TODAY_SQL}, 'YYYY-MM-DD') AS today`)).rows[0].today;
+        const rerunCol = rotationSchemaReady ? 'MAX(rerun_of)' : 'NULL::int';
         const { rows } = await pool.query(`SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS day, bool_or(is_live) AS live,
                 MAX(CASE WHEN field_type = 'Title' THEN field_value END) AS title,
-                STRING_AGG(DISTINCT CASE WHEN field_type = 'Artist' THEN field_value END, ', ') AS artists
+                STRING_AGG(DISTINCT CASE WHEN field_type = 'Artist' THEN field_value END, ', ') AS artists,
+                ${rerunCol} AS rerun_of
             FROM musicgrid_templates WHERE reporting_day IS NOT NULL GROUP BY grid_id`);
         const calendar = [];
         const start = new Date(today + 'T00:00:00Z');
@@ -502,17 +616,20 @@ app.get('/grid-calendar', async (req, res) => {
             const date = new Date(start.getTime() + i * 86400000).toISOString().slice(0, 10);
             const candidates = rows.filter(row => row.day <= date)
                 .sort((a, b) => (b.day.localeCompare(a.day)) || ((b.live ? 1 : 0) - (a.live ? 1 : 0)) || (Number(b.grid_id) - Number(a.grid_id)));
-            const pick = candidates[0];
+            const scheduled = Boolean(candidates[0] && candidates[0].day === date);
+            const pending = !scheduled && date > today && ROTATE_DAILY && rotationSchemaReady;
+            const pick = pending ? null : candidates[0];
             // Upcoming artists and titles are spoilers, so only the admin page sees them
-            const entry = { date, scheduled: Boolean(pick && pick.day === date) };
+            const entry = { date, scheduled, rerun: pending || Boolean(scheduled && pick.rerun_of) };
             if (isAdmin) {
                 entry.grid_id = pick ? pick.grid_id : null;
                 entry.artists = pick ? pick.artists : null;
                 entry.title = pick ? pick.title : null;
+                entry.rerun_of = pick ? pick.rerun_of : null;
             }
             calendar.push(entry);
         }
-        res.json({ today, timezone: GRID_TIMEZONE, calendar });
+        res.json({ today, timezone: GRID_TIMEZONE, rotation: ROTATE_DAILY && rotationSchemaReady, calendar });
     } catch (err) {
         console.error('Error building grid calendar: ', err.message);
         res.status(500).send('Error building grid calendar');
@@ -563,6 +680,28 @@ app.post('/admin/create-grids', requireAdmin, async (req, res) => {
         await client.query('LOCK TABLE musicgrid_templates IN EXCLUSIVE MODE');
         let nextId = Number((await client.query('SELECT COALESCE(MAX(grid_id), 0) AS id FROM musicgrid_templates')).rows[0].id) + 1;
         const created = [];
+        const moved = [];
+        const today = (await client.query(`SELECT to_char(${TODAY_SQL}, 'YYYY-MM-DD') AS d`)).rows[0].d;
+        const uploadDays = new Set(grids.map(grid => grid.date));
+        const dayTaken = async day => uploadDays.has(day)
+            || (await client.query('SELECT 1 FROM musicgrid_templates WHERE reporting_day = $1::date LIMIT 1', [day])).rows.length > 0;
+        // A new grid for a future day that already has one bumps the old
+        // grid to the next open day, so nothing scheduled gets lost.
+        for (const day of [...uploadDays].sort()) {
+            if (day <= today) continue;
+            const existing = await client.query(`SELECT grid_id, MAX(CASE WHEN field_type = 'Title' THEN field_value END) AS title
+                FROM musicgrid_templates GROUP BY grid_id HAVING MAX(reporting_day) = $1::date ORDER BY grid_id`, [day]);
+            for (const row of existing.rows) {
+                let next = new Date(day + 'T00:00:00Z');
+                let nextDay;
+                do {
+                    next = new Date(next.getTime() + 86400000);
+                    nextDay = next.toISOString().slice(0, 10);
+                } while (await dayTaken(nextDay));
+                await client.query('UPDATE musicgrid_templates SET reporting_day = $2::date WHERE grid_id = $1', [row.grid_id, nextDay]);
+                moved.push({ grid_id: row.grid_id, title: row.title, from: day, to: nextDay });
+            }
+        }
         for (const grid of grids) {
             const gridId = nextId++;
             const rows = [];
@@ -583,7 +722,7 @@ app.post('/admin/create-grids', requireAdmin, async (req, res) => {
             created.push({ grid_id: gridId, date: grid.date, title: grid.title || null });
         }
         await client.query('COMMIT');
-        res.json({ created });
+        res.json({ created, moved });
     } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         console.error('Error creating grids: ', err.message);
@@ -592,6 +731,84 @@ app.post('/admin/create-grids', requireAdmin, async (req, res) => {
         client.release();
     }
 });
+
+// ===================================================================
+// Difficulty for the Browse cards
+// Blends what players actually scored with an estimate from the answer
+// lists (a square that accepts only one or two songs is hard). The more
+// players a grid has, the more their scores count.
+// ===================================================================
+const DIFFICULTY_LABELS = ['Easy', 'Medium', 'Hard', 'Expert'];
+
+// Rough chance a typical player fills a square that accepts n songs
+function squareChance(n) {
+    if (n <= 0) return 0;
+    if (n === 1) return 0.35;
+    if (n === 2) return 0.5;
+    if (n <= 4) return 0.62;
+    if (n <= 8) return 0.74;
+    if (n <= 15) return 0.84;
+    return 0.9;
+}
+
+function rateDifficulty(counts, squares, scores) {
+    const players = scores ? Number(scores.players) || 0 : 0;
+    if (!counts.length && !players) return null; // nothing to go on
+    const all = counts.slice(0, squares);
+    while (all.length < squares) all.push(0);
+    const estimate = 1 + all.reduce((sum, n) => sum + squareChance(n), 0) * 8.5;
+    const weight = Math.min(players, 8) / 8;
+    const score = players ? weight * Number(scores.median) + (1 - weight) * estimate : estimate;
+    const level = score >= 60 ? 1 : score >= 45 ? 2 : score >= 30 ? 3 : 4;
+    return { level, label: DIFFICULTY_LABELS[level - 1], basis: players >= 3 ? 'scores' : 'answers', players };
+}
+
+// { [id]: difficulty } for a page of Browse grids
+async function difficultyFor(kind, grids) {
+    const ids = grids.map(grid => String(kind === 'daily' ? grid.grid_id : grid.custom_grid_id));
+    if (!ids.length) return {};
+    const answers = kind === 'daily'
+        ? await pool.query(`SELECT grid_id::text AS id, field, COUNT(*) AS n FROM musicgrid_answers
+            WHERE grid_id::text = ANY($1) GROUP BY 1, 2`, [ids])
+        : await pool.query(`SELECT custom_grid_id::text AS id, field, COUNT(*) AS n FROM custom_answers
+            WHERE custom_grid_id::text = ANY($1) GROUP BY 1, 2`, [ids]);
+    const counts = {};
+    answers.rows.forEach(row => { (counts[row.id] = counts[row.id] || []).push(Number(row.n)); });
+
+    const who = leaderboardSchemaReady ? PLAYER_KEY : 'lower(trim(player_name))';
+    let scoreSql;
+    if (kind === 'custom') {
+        scoreSql = `WITH best AS (
+                SELECT a.id, ${who} AS who, MAX(l.player_score) AS s
+                FROM unnest($1::text[]) AS a(id)
+                JOIN leaderboard_playerscores l ON l.owning_grid_id::text = a.id || '100'
+                ${leaderboardSchemaReady ? "AND l.board_type = 'custom'" : ''}
+                GROUP BY 1, 2)
+            SELECT id, COUNT(*) AS players, percentile_cont(0.5) WITHIN GROUP (ORDER BY s) AS median FROM best GROUP BY id`;
+    } else {
+        // Reruns share scores with the original: it's the same puzzle
+        const family = rotationSchemaReady ? 'COALESCE(MAX(rerun_of), grid_id)' : 'grid_id';
+        scoreSql = `WITH fams AS (
+                SELECT grid_id::text AS id, ${family} AS fam FROM musicgrid_templates GROUP BY grid_id
+            ), members AS (
+                SELECT a.id AS asked, m.id AS member FROM fams a JOIN fams m ON m.fam = a.fam WHERE a.id = ANY($1)
+            ), best AS (
+                SELECT m.asked AS id, ${who} AS who, MAX(l.player_score) AS s
+                FROM members m JOIN leaderboard_playerscores l ON l.owning_grid_id::text = m.member
+                ${leaderboardSchemaReady ? "AND l.board_type = 'daily'" : ''}
+                GROUP BY 1, 2)
+            SELECT id, COUNT(*) AS players, percentile_cont(0.5) WITHIN GROUP (ORDER BY s) AS median FROM best GROUP BY id`;
+    }
+    const scores = {};
+    (await pool.query(scoreSql, [ids])).rows.forEach(row => { scores[row.id] = row; });
+
+    const out = {};
+    grids.forEach((grid, i) => {
+        const squares = Math.max(1, (Number(grid.artist_count) || 3) * (Number(grid.category_count) || 3));
+        out[ids[i]] = rateDifficulty(counts[ids[i]] || [], squares, scores[ids[i]]);
+    });
+    return out;
+}
 
 // ===================================================================
 // Browse: past daily grids and player-made grids
@@ -613,6 +830,7 @@ function pageParams(req) {
 // Daily grids that have already played, newest first (one per day).
 app.get('/grids/daily', async (req, res) => {
     try {
+        await ensureTodaysGrid();
         const { limit, offset } = pageParams(req);
         const { rows } = await pool.query(`WITH grids AS (
                 SELECT grid_id, MAX(reporting_day) AS day, bool_or(is_live) AS live,
@@ -627,8 +845,25 @@ app.get('/grids/daily', async (req, res) => {
             SELECT grid_id, to_char(day, 'YYYY-MM-DD') AS day, title, artists, categories,
                 ${playersSql('played.grid_id::text', 'daily')} AS players
             FROM played ORDER BY day DESC LIMIT $1 OFFSET $2`, [limit + 1, offset]);
+        const page = rows.slice(0, limit).map(row => ({
+            ...row,
+            artist_count: (row.artists || []).length,
+            category_count: (row.categories || []).length
+        }));
+        const [difficulty, rerunDays] = await Promise.all([
+            difficultyFor('daily', page).catch(error => { console.error('Difficulty failed: ', error.message); return {}; }),
+            firstDays(page.map(row => row.grid_id)).catch(() => new Map())
+        ]);
         res.json({
-            grids: rows.slice(0, limit).map(row => ({ ...row, players: Number(row.players) })),
+            grids: page.map(({ artist_count: _a, category_count: _c, ...row }) => {
+                const firstDay = rerunDays.get(String(row.grid_id));
+                return {
+                    ...row,
+                    players: Number(row.players),
+                    difficulty: difficulty[String(row.grid_id)] || null,
+                    rerun_of_day: firstDay && firstDay !== row.day ? firstDay : null
+                };
+            }),
             hasMore: rows.length > limit
         });
     } catch (err) {
@@ -648,18 +883,23 @@ app.get('/grids/custom', async (req, res) => {
         if (ids.length) params.push(ids);
         const { rows } = await pool.query(`WITH grids AS (
                 SELECT c.custom_grid_id, MAX(c.grid_title) AS title,
-                    ARRAY_AGG(c.field_value ORDER BY c.field) FILTER (WHERE c.field_type = 'Artist') AS artists
+                    ARRAY_AGG(c.field_value ORDER BY c.field) FILTER (WHERE c.field_type = 'Artist') AS artists,
+                    COUNT(DISTINCT c.field) FILTER (WHERE c.field_type = 'Category') AS category_count
                 FROM custom_templates c
                 WHERE EXISTS (SELECT 1 FROM custom_answers a WHERE a.custom_grid_id::text = c.custom_grid_id::text)
                     ${ids.length ? 'AND c.custom_grid_id::text = ANY($3)' : ''}
                 GROUP BY c.custom_grid_id
             )
-            SELECT custom_grid_id, title, artists,
+            SELECT custom_grid_id, title, artists, category_count,
                 ${playersSql("(grids.custom_grid_id::text || '100')", 'custom')} AS players
             FROM grids ORDER BY custom_grid_id DESC LIMIT $1 OFFSET $2`, params);
+        const page = rows.slice(0, limit).map(row => ({ ...row, artist_count: (row.artists || []).length }));
+        const difficulty = await difficultyFor('custom', page)
+            .catch(error => { console.error('Difficulty failed: ', error.message); return {}; });
         res.json({
-            grids: rows.slice(0, limit).map(row => ({
+            grids: page.map(({ artist_count: _a, category_count: _c, ...row }) => ({
                 ...row,
+                difficulty: difficulty[String(row.custom_grid_id)] || null,
                 // Grids built while the title model was broken get their artists as a title
                 title: !row.title || BROKEN_TITLES.includes(row.title) ? fallbackTitle((row.artists || []).join(', ')) : row.title,
                 players: Number(row.players)
@@ -882,6 +1122,7 @@ app.get('/latest-grid', async (req, res) => {
             HAVING MAX(reporting_day) <= ${TODAY_SQL}
             ORDER BY MAX(reporting_day) DESC, bool_or(is_live) DESC, grid_id DESC
             LIMIT 1`;
+        let row;
         if (req.query.grid_id !== undefined) {
             // A specific past grid from the archive. Future grids stay hidden.
             const past = await pool.query(`SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS reporting_day
@@ -890,13 +1131,19 @@ app.get('/latest-grid', async (req, res) => {
             if (!past.rows.length) {
                 return res.status(404).json({ error: 'That grid is not available' });
             }
-            return res.json({ latestGridId: past.rows[0].grid_id, reportingDay: past.rows[0].reporting_day });
+            row = past.rows[0];
+        } else {
+            await ensureTodaysGrid();
+            const result = await pool.query(query);
+            if (!result.rows.length) {
+                return res.status(404).json({ error: 'No grid is scheduled yet' });
+            }
+            row = result.rows[0];
         }
-        const result = await pool.query(query);
-        if (!result.rows.length) {
-            return res.status(404).json({ error: 'No grid is scheduled yet' });
-        }
-        res.json({ latestGridId: result.rows[0].grid_id, reportingDay: result.rows[0].reporting_day });
+        const firstDay = (await firstDays([row.grid_id]).catch(() => new Map())).get(String(row.grid_id));
+        const body = { latestGridId: row.grid_id, reportingDay: row.reporting_day };
+        if (firstDay && firstDay !== row.reporting_day) body.rerunOf = firstDay;
+        res.json(body);
     } catch (err) {
         console.error(err);
         res.status(500).send('Error fetching latest grid');
@@ -998,9 +1245,10 @@ app.post('/check-custom-answer', async (req, res) => {
 
 //Endpoint to update encoded answers table
 app.post('/update-encoded-answers', requireAdmin, async (req, res) => {
+    let client;
     try {
         const { encodedAnswers } = req.body;
-        const client = await pool.connect();
+        client = await pool.connect();
 
         for (const answer of encodedAnswers) {
             const { fieldKey, song, popularity, normedAnswerScore, previewUrl, gridId } = answer;
@@ -1025,9 +1273,10 @@ app.post('/update-encoded-answers', requireAdmin, async (req, res) => {
 
 //Endpoint to update encoded answers for custom table
 app.post('/update-custom-encoded-answers', async (req, res) => {
+    let client;
     try {
         const { encodedAnswers } = req.body;
-        const client = await pool.connect();
+        client = await pool.connect();
 
         for (const answer of encodedAnswers) {
             const { fieldKey, song, popularity, normedAnswerScore, previewUrl, customGridId } = answer;
@@ -1050,67 +1299,214 @@ app.post('/update-custom-encoded-answers', async (req, res) => {
     }
 });
 
-app.post('/get-cheat-preview-url', async (req, res) => {
+// ===================================================================
+// Song clips for easy mode
+// Spotify stopped sending 30-second previews to development-mode apps
+// (developer.spotify.com/blog/2024-11-27-changes-to-the-web-api), so grids
+// built since then saved empty preview URLs and hints stopped working.
+// Clips now come from the iTunes Search API (no key, stable URLs), with
+// Deezer as a backup. Clips found on iTunes are saved back onto the answer
+// so the next hint for that square is instant.
+// ===================================================================
+const CLIP_TIMEOUT_MS = 6000;
+const CLIP_TTL_MS = { itunes: 7 * 86400000, deezer: 10 * 60000, miss: 30 * 60000 };
+const clipCache = new Map();
+
+// Loose title/artist key: no accents, brackets, " - Remastered" tails or punctuation
+function matchKey(text) {
+    return String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+        .replace(/\s*[([][^)\]]*[)\]]/g, ' ')
+        .replace(/\s+-\s+.*$/, '')
+        .replace(/\s(feat|ft)\.?\s.*$/, '')
+        .replace(/&/g, ' and ')
+        .trim()
+        .replace(/^the\s+/, '')
+        .replace(/[^a-z0-9]/g, '');
+}
+
+function sameArtist(found, wanted) {
+    const a = matchKey(found);
+    const b = matchKey(wanted);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return b.length >= 3 && a.includes(b); // "Queen & David Bowie" counts for Queen
+}
+
+function asJson(data) {
+    if (typeof data !== 'string') return data || {};
+    try { return JSON.parse(data); } catch (error) { return {}; }
+}
+
+function pickClip(items, song, artist) {
+    const want = matchKey(song);
+    if (!want) return null;
+    const usable = items.filter(item => item.url && sameArtist(item.artist, artist));
+    const hit = usable.find(item => matchKey(item.title) === want)
+        || usable.find(item => {
+            const key = matchKey(item.title);
+            return key.length >= 4 && (key.startsWith(want) || want.startsWith(key));
+        });
+    return hit ? String(hit.url).replace(/^http:/, 'https:') : null;
+}
+
+async function itunesSongs(term, extra) {
+    const params = new URLSearchParams({ term: term.slice(0, 200), country: 'US', media: 'music', entity: 'song', limit: '25', ...extra });
+    const { data } = await axios.get(`https://itunes.apple.com/search?${params}`, { timeout: CLIP_TIMEOUT_MS });
+    const results = asJson(data).results;
+    return (Array.isArray(results) ? results : [])
+        .map(r => ({ title: r.trackName, artist: r.artistName, url: r.previewUrl }));
+}
+
+async function deezerSongs(query) {
+    const params = new URLSearchParams({ q: query, limit: '25' });
+    const { data } = await axios.get(`https://api.deezer.com/search?${params}`, { timeout: CLIP_TIMEOUT_MS });
+    const items = asJson(data).data;
+    return (Array.isArray(items) ? items : [])
+        .map(t => ({ title: t.title, artist: t.artist && t.artist.name, url: t.preview }));
+}
+
+// { url, source } for one song, or null if neither service has a clip.
+// avoid: a URL the player's browser couldn't play, so look past it.
+async function findSongClip(song, artist, avoid) {
+    const key = `${matchKey(artist)}|${matchKey(song)}`;
+    const cached = clipCache.get(key);
+    if (!avoid && cached && Date.now() - cached.at < CLIP_TTL_MS[cached.source || 'miss']) return cached.url ? cached : null;
+    let found = null;
     try {
-        const { gridId, fieldKey } = req.body;
-        const client = await pool.connect();
-
-        // Query to find the most popular song's preview URL for a specific fieldKey and gridId
-        const query = `
-            SELECT preview_url
-            FROM musicgrid_answers
-            WHERE grid_id = $1 AND field = $2 AND preview_url IS NOT NULL
-            ORDER BY normed_score ASC, RANDOM()
-            LIMIT 1
-        `;
-
-        const result = await client.query(query, [gridId, fieldKey]);
-
-        // Check if a result was found
-        if (result.rows.length > 0) {
-            const previewUrl = result.rows[0].preview_url;
-            res.json({ previewUrl });
-        } else {
-            res.status(404).send('Preview URL not found for the given field and grid ID.');
-        }
-
-        client.release();
-    } catch (err) {
-        console.error('Error fetching cheat preview URL:', err.message);
-        client?.release();
-        res.status(500).send('Error fetching cheat preview URL');
+        const url = pickClip(await itunesSongs(`${artist} ${song}`), song, artist);
+        if (url && url !== avoid) found = { url, source: 'itunes' };
+    } catch (error) {
+        console.error('iTunes clip lookup failed: ', error.message);
     }
-});
-
-app.post('/get-custom-cheat-preview-url', async (req, res) => {
-    try {
-        const { customGridId, fieldKey } = req.body;
-        const client = await pool.connect();
-
-        // Query to find the most popular song's preview URL for a specific fieldKey and gridId
-        const query = `
-            SELECT preview_url
-            FROM custom_answers
-            WHERE custom_grid_id = $1 AND field = $2 AND preview_url IS NOT NULL
-            ORDER BY normed_score ASC, RANDOM()
-            LIMIT 1
-        `;
-
-        const result = await client.query(query, [customGridId, fieldKey]);
-
-        // Check if a result was found
-        if (result.rows.length > 0) {
-            const previewUrl = result.rows[0].preview_url;
-            res.json({ previewUrl });
-        } else {
-            res.status(404).send('Preview URL not found for the given field and grid ID.');
+    if (!found) {
+        try {
+            const url = pickClip(await deezerSongs(`artist:"${artist}" track:"${song}"`), song, artist);
+            if (url) found = { url, source: 'deezer' };
+        } catch (error) {
+            console.error('Deezer clip lookup failed: ', error.message);
         }
+    }
+    clipCache.set(key, found ? { ...found, at: Date.now() } : { url: null, source: null, at: Date.now() });
+    return found;
+}
 
-        client.release();
+const HINT_SOURCES = {
+    daily: { answers: 'musicgrid_answers', answerId: 'grid_id', templates: 'musicgrid_templates', templateId: 'grid_id' },
+    custom: { answers: 'custom_answers', answerId: 'custom_grid_id', templates: 'custom_templates', templateId: 'custom_grid_id' }
+};
+
+// A clip of a song that fits the square, most popular answers first.
+// fresh=true skips saved URLs (the player's browser couldn't play one).
+async function hintClip(kind, gridId, fieldKey, fresh) {
+    const src = HINT_SOURCES[kind];
+    const artistField = String(fieldKey || '').split(' ')[1];
+    if (gridId === undefined || gridId === null || !artistField) return null;
+    const { rows } = await pool.query(`SELECT song_name, preview_url FROM ${src.answers}
+        WHERE ${src.answerId}::text = $1::text AND field = $2
+        ORDER BY normed_score ASC, RANDOM() LIMIT 8`, [String(gridId), fieldKey]);
+    if (!rows.length) return null;
+    if (!fresh) {
+        const saved = rows.find(row => row.preview_url && /^https?:\/\//.test(row.preview_url));
+        if (saved) return { url: saved.preview_url, source: 'saved' };
+    }
+    const artist = (await pool.query(`SELECT field_value FROM ${src.templates}
+        WHERE ${src.templateId}::text = $1::text AND field_type = 'Artist' AND field = $2 LIMIT 1`, [String(gridId), artistField])).rows[0];
+    if (!artist) return null;
+    for (const row of rows.slice(0, 4)) {
+        const clip = await findSongClip(row.song_name, artist.field_value, fresh ? (row.preview_url || 'none') : null);
+        if (!clip) continue;
+        if (clip.source === 'itunes') {
+            await pool.query(`UPDATE ${src.answers} SET preview_url = $1
+                WHERE ${src.answerId}::text = $2::text AND field = $3 AND song_name = $4`, [clip.url, String(gridId), fieldKey, row.song_name])
+                .catch(error => console.error('Could not save clip: ', error.message));
+        }
+        return clip;
+    }
+    return null;
+}
+
+function hintHandler(kind, idKey) {
+    return async (req, res) => {
+        try {
+            const clip = await hintClip(kind, req.body[idKey], req.body.fieldKey, Boolean(req.body.fresh));
+            if (!clip) return res.status(404).send('Preview URL not found for the given field and grid ID.');
+            res.json({ previewUrl: clip.url, source: clip.source });
+        } catch (err) {
+            console.error('Error fetching cheat preview URL:', err.message);
+            res.status(500).send('Error fetching cheat preview URL');
+        }
+    };
+}
+
+app.post('/get-cheat-preview-url', hintHandler('daily', 'gridId'));
+app.post('/get-custom-cheat-preview-url', hintHandler('custom', 'customGridId'));
+
+// Does this artist have song clips anywhere? Daily grids skip artists that
+// don't, and the grid builder can leave them out. Results are kept in the
+// artist_clips table. clips: true / false, or null if it couldn't be checked.
+const artistClipMemo = new Map();
+
+function artistKey(name) {
+    return String(name || '').trim().toLowerCase();
+}
+
+async function checkArtistClips(name) {
+    const key = artistKey(name);
+    if (!key) return { name, clips: null };
+    const memo = artistClipMemo.get(key);
+    if (memo && Date.now() - memo.at < 6 * 3600000) return { name, clips: memo.clips, source: memo.source };
+    if (rotationSchemaReady) {
+        const saved = await pool.query(`SELECT has_clips, source FROM artist_clips
+            WHERE name_key = $1 AND checked_at > now() - interval '30 days'`, [key]).catch(() => ({ rows: [] }));
+        if (saved.rows.length) {
+            artistClipMemo.set(key, { clips: saved.rows[0].has_clips, source: saved.rows[0].source, at: Date.now() });
+            return { name, clips: saved.rows[0].has_clips, source: saved.rows[0].source };
+        }
+    }
+    let clips = null;
+    let source = null;
+    let answered = 0;
+    try {
+        const songs = await itunesSongs(name, { attribute: 'artistTerm' });
+        answered += 1;
+        if (songs.some(song => song.url && sameArtist(song.artist, name))) { clips = true; source = 'itunes'; }
+    } catch (error) {
+        console.error('iTunes artist check failed: ', error.message);
+    }
+    if (!clips) {
+        try {
+            const songs = await deezerSongs(`artist:"${name}"`);
+            answered += 1;
+            if (songs.some(song => song.url && sameArtist(song.artist, name))) { clips = true; source = 'deezer'; }
+        } catch (error) {
+            console.error('Deezer artist check failed: ', error.message);
+        }
+    }
+    // Neither service has a playable song by them: hints can't work
+    if (!clips && answered) clips = false;
+    if (clips !== null) {
+        artistClipMemo.set(key, { clips, source, at: Date.now() });
+        if (rotationSchemaReady) {
+            await pool.query(`INSERT INTO artist_clips (name_key, artist, has_clips, source, checked_at) VALUES ($1, $2, $3, $4, now())
+                ON CONFLICT (name_key) DO UPDATE SET artist = $2, has_clips = $3, source = $4, checked_at = now()`, [key, String(name).trim(), clips, source])
+                .catch(error => console.error('Could not save artist clip check: ', error.message));
+        }
+    }
+    return { name, clips, source };
+}
+
+// Body: { artists: ["Name", ...] } (up to 12). Checked one at a time to stay
+// well under iTunes' rate limit.
+app.post('/artist-clips', async (req, res) => {
+    try {
+        const names = (Array.isArray(req.body.artists) ? req.body.artists : [])
+            .filter(name => typeof name === 'string' && name.trim() && name.length <= 120).slice(0, 12);
+        const results = [];
+        for (const name of names) results.push(await checkArtistClips(name.trim()));
+        res.json({ artists: results });
     } catch (err) {
-        console.error('Error fetching cheat preview URL:', err.message);
-        client?.release();
-        res.status(500).send('Error fetching cheat preview URL');
+        console.error('Error checking artist clips: ', err.message);
+        res.status(500).send('Error checking artist clips');
     }
 });
 
