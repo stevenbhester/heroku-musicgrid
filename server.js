@@ -120,6 +120,8 @@ async function artistTrackRanks(artistName) {
             if (!ranks.has(name)) {
                 ranks.set(name, page * SPOTIFY_PAGE_LIMIT + index);
             }
+            const loose = 'k:' + matchKey(song.name);
+            if (!ranks.has(loose)) ranks.set(loose, page * SPOTIFY_PAGE_LIMIT + index);
         });
         if (items.length < SPOTIFY_PAGE_LIMIT) {
             break;
@@ -169,12 +171,15 @@ app.post('/search-artists', async (req, res) => {
 // Admin access
 // Set ADMIN_KEY in the Heroku config vars to lock the admin-only
 // endpoints. The admin page asks for the key once and sends it as an
-// x-admin-key header. Until ADMIN_KEY is set, these stay open as before.
+// x-admin-key header. Without ADMIN_KEY set, admin endpoints refuse.
 // ===================================================================
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 function requireAdmin(req, res, next) {
-    if (!ADMIN_KEY || req.get('x-admin-key') === ADMIN_KEY) {
+    if (!ADMIN_KEY) {
+        return res.status(503).json({ error: 'Set ADMIN_KEY in the Heroku config vars to use the admin page' });
+    }
+    if (req.get('x-admin-key') === ADMIN_KEY) {
         return next();
     }
     res.status(401).json({ error: 'Admin key required' });
@@ -465,6 +470,116 @@ app.post('/leaderboards', async (req, res) => {
     }
 });
 
+// Players are a hidden random id saved in their browser, never shown on a
+// leaderboard. This moves one browser's scores (and answer flags) onto the
+// id from another device, so both count as one player from then on.
+// Body: { from_id, to_id } where from_id is this browser's current id.
+app.post('/link-player', async (req, res) => {
+    const fromId = validPlayerId(req.body.from_id);
+    const toId = validPlayerId(req.body.to_id);
+    if (!fromId || !toId) return res.status(400).json({ error: 'That player code doesn\'t look right' });
+    if (!leaderboardSchemaReady) return res.status(503).json({ error: 'Try again in a moment' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        let moved = 0;
+        if (fromId !== toId) {
+            moved = (await client.query('UPDATE leaderboard_playerscores SET player_id = $2 WHERE player_id = $1', [fromId, toId])).rowCount;
+            if (editorSchemaReady) {
+                // One flag per player per song per square: drop this browser's copy where both flagged it
+                await client.query(`DELETE FROM answer_complaints a WHERE a.player_id = $1 AND EXISTS (
+                    SELECT 1 FROM answer_complaints b WHERE b.player_id = $2 AND b.kind = a.kind AND b.grid_id = a.grid_id
+                    AND b.field = a.field AND b.song_key = a.song_key)`, [fromId, toId]);
+                await client.query('UPDATE answer_complaints SET player_id = $2 WHERE player_id = $1', [fromId, toId]);
+            }
+        }
+        const { rows } = await client.query(`SELECT COUNT(DISTINCT owning_grid_id::text)::int AS grids FROM leaderboard_playerscores
+            WHERE player_id = $1 AND board_type = 'daily'`, [toId]);
+        await client.query('COMMIT');
+        res.json({ moved, daily_grids: rows[0].grids });
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('Error linking players: ', err.message);
+        res.status(500).json({ error: 'Could not link this browser' });
+    } finally {
+        client.release();
+    }
+});
+
+// ===================================================================
+// Spotify sign-in access requests
+// Since February 2026 a Development Mode Spotify app only works for a few
+// accounts the developer adds by hand in the Spotify Developer Dashboard.
+// Players ask for access here; the admin page lists the requests.
+// ===================================================================
+let accessSchemaReady = false;
+const MAX_PENDING_ACCESS = 300;
+
+async function ensureAccessSchema() {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS spotify_access_requests (
+            id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, email_key TEXT UNIQUE NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT now(), decided_at TIMESTAMPTZ)`);
+        accessSchemaReady = true;
+    } catch (error) {
+        console.error('Could not set up Spotify access requests: ', error.message);
+    }
+}
+ensureAccessSchema();
+
+// Body: { name, email, website } (website is a hidden field only bots fill in)
+app.post('/spotify-access-request', async (req, res) => {
+    const name = String(req.body.name || '').trim().slice(0, 60);
+    const email = String(req.body.email || '').trim().slice(0, 120);
+    if (req.body.website) return res.json({ status: 'received' });
+    if (!name) return res.status(400).json({ error: 'Add your name' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'That email doesn\'t look right' });
+    if (!accessSchemaReady) return res.status(503).json({ error: 'Try again in a moment' });
+    try {
+        const pending = (await pool.query("SELECT COUNT(*)::int AS n FROM spotify_access_requests WHERE status = 'pending'")).rows[0].n;
+        if (pending >= MAX_PENDING_ACCESS) return res.status(429).json({ error: 'Too many requests are waiting right now. Try again later.' });
+        const { rows } = await pool.query(`INSERT INTO spotify_access_requests (name, email, email_key) VALUES ($1, $2, $3)
+            ON CONFLICT (email_key) DO UPDATE SET name = EXCLUDED.name
+            RETURNING status, (xmax = 0) AS fresh`, [name, email, email.toLowerCase()]);
+        const row = rows[0];
+        res.json({ status: row.status === 'added' ? 'added' : row.fresh ? 'received' : 'already' });
+    } catch (err) {
+        console.error('Error saving access request: ', err.message);
+        res.status(500).json({ error: 'Could not send your request' });
+    }
+});
+
+app.get('/admin/spotify-access-requests', requireAdmin, async (req, res) => {
+    try {
+        const all = req.query.status === 'all';
+        const { rows } = await pool.query(`SELECT id, name, email, status, created_at, decided_at FROM spotify_access_requests
+            ${all ? '' : "WHERE status = 'pending'"} ORDER BY (status = 'pending') DESC, created_at DESC LIMIT 200`);
+        res.json({ requests: rows });
+    } catch (err) {
+        console.error('Error loading access requests: ', err.message);
+        res.status(500).json({ error: 'Error loading access requests' });
+    }
+});
+
+// Body: { id, action: 'added' | 'delete' }
+app.post('/admin/spotify-access-requests/decide', requireAdmin, async (req, res) => {
+    const id = Number(req.body.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'id must be a number' });
+    try {
+        if (req.body.action === 'delete') {
+            await pool.query('DELETE FROM spotify_access_requests WHERE id = $1', [id]);
+        } else if (req.body.action === 'added') {
+            await pool.query("UPDATE spotify_access_requests SET status = 'added', decided_at = now() WHERE id = $1", [id]);
+        } else {
+            return res.status(400).json({ error: 'action must be added or delete' });
+        }
+        res.json({ id, action: req.body.action });
+    } catch (err) {
+        console.error('Error updating access request: ', err.message);
+        res.status(500).json({ error: 'Error updating access request' });
+    }
+});
+
 // ===================================================================
 // Daily grid scheduling (admin)
 // ===================================================================
@@ -707,7 +822,11 @@ app.post('/admin/create-grids', requireAdmin, async (req, res) => {
             const rows = [];
             if (grid.title && grid.title.trim()) rows.push(['Title', 'T1', grid.title.trim()]);
             grid.artists.forEach((artist, a) => rows.push(['Artist', `A${a + 1}`, artist.trim()]));
-            grid.categories.forEach((category, c) => rows.push(['Category', `C${c + 1}`, category.trim()]));
+            grid.categories.forEach((category, c) => {
+                rows.push(['Category', `C${c + 1}`, category.trim()]);
+                const kind = grid.kinds && grid.kinds[category];
+                if (['ai', 'opinion'].includes(kind)) rows.push(['CategoryKind', `C${c + 1}`, kind]);
+            });
             grid.categories.forEach((category, c) => {
                 grid.artists.forEach((artist, a) => {
                     const songs = [...new Set(grid.answers[category][artist].map(song => song.trim()))];
@@ -722,7 +841,21 @@ app.post('/admin/create-grids', requireAdmin, async (req, res) => {
             created.push({ grid_id: gridId, date: grid.date, title: grid.title || null });
         }
         await client.query('COMMIT');
-        res.json({ created, moved });
+        // score: true scores answers here instead of in the browser. A big
+        // upload can take longer than Heroku waits, so after SLOW_REPLY_MS
+        // the reply says "pending" and scoring finishes in the background.
+        let scored = false;
+        if (req.body.score) {
+            const scoring = (async () => {
+                for (const grid of created) await scoreGrid('daily', grid.grid_id);
+                return true;
+            })().catch(error => {
+                console.error('Scoring new grids failed: ', error.message);
+                return false;
+            });
+            scored = await Promise.race([scoring, sleep(SLOW_REPLY_MS).then(() => 'pending')]);
+        }
+        res.json({ created, moved, scored });
     } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         console.error('Error creating grids: ', err.message);
@@ -1108,6 +1241,805 @@ app.post('/scores', async (req, res) => {
     }
 });
 
+// ===================================================================
+// Category engine
+// Reads an artist's catalog from Spotify once (albums and singles, then
+// every track), then checks it against every category. Three kinds:
+//   spotify  - checked from Spotify data, always right
+//   ai       - facts an AI checks (charts, awards...), usually right
+//   opinion  - judgment calls an AI makes (breakup songs...)
+// The AI only sorts the artist's real songs, so it can't invent titles.
+// Used by the grid builder and the admin page's daily grid maker.
+// ===================================================================
+const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+const catalogCache = new Map();
+const MIN_CATEGORY_SONGS = 2;
+const SKIP_RELEASE = /\b(live (at|from|in|on)|\(live\)|- live\b|unplugged|remix(es)?|instrumentals?|karaoke|a ?cappella|commentary|sped up|slowed)\b/i;
+const SKIP_TRACK = /\b(live (at|from|in|on)|\(live\)|- live\b|remix|instrumental|karaoke|a ?cappella|commentary|sped up|slowed|interlude|intro|outro|skit|voice memo)\b/i;
+
+// The plain song name players will recognize: no "- 2011 Remaster" or "(feat. X)"
+function cleanSongName(name) {
+    return String(name || '')
+        .replace(/\s+-\s+(\d{4}\s+)?(remaster(ed)?|re-?recorded|single version|radio edit|album version|mono|stereo|bonus track|edit)\b.*$/i, '')
+        .replace(/\s*[([](feat\.?|ft\.?|with|featuring|from)\s[^)\]]*[)\]]/gi, '')
+        .replace(/\s*[([][^)\]]*remaster[^)\]]*[)\]]/gi, '')
+        .replace(/"/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+async function artistCatalog(artistId, artistName) {
+    const cacheKey = String(artistId);
+    const cached = catalogCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.catalog;
+
+    const releases = [];
+    let total = 1;
+    for (let offset = 0; offset < Math.min(total, MAX_ARTIST_ALBUMS); offset += SPOTIFY_PAGE_LIMIT) {
+        const page = await spotifyGet(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${offset}`);
+        total = page.total || 0;
+        releases.push(...(page.items || []));
+        if (!page.items || page.items.length < SPOTIFY_PAGE_LIMIT) break;
+    }
+    const kept = releases.filter(release => release && release.name && !SKIP_RELEASE.test(release.name));
+    const albums = kept.filter(release => (release.album_type || 'album') === 'album')
+        .sort((a, b) => String(a.release_date).localeCompare(String(b.release_date)));
+    const debutId = albums.length ? albums[0].id : null;
+    const latestId = albums.length ? albums[albums.length - 1].id : null;
+
+    const songs = new Map();
+    for (const release of kept) {
+        const data = await spotifyGet(`https://api.spotify.com/v1/albums/${encodeURIComponent(release.id)}/tracks?market=US&limit=50`);
+        const tracks = (data.items || []).filter(track => track && track.name && !SKIP_TRACK.test(track.name));
+        const type = release.album_type || 'album';
+        const year = Number(String(release.release_date || '').slice(0, 4)) || null;
+        const totalTracks = release.total_tracks || tracks.length;
+        for (const track of tracks) {
+            const theirs = (track.artists || []).some(artist => artist.id === artistId || sameArtist(artist.name, artistName));
+            if (!theirs) continue;
+            const name = cleanSongName(track.name);
+            const key = matchKey(name);
+            if (!key) continue;
+            let song = songs.get(key);
+            if (!song) {
+                song = { name, raw: track.name, key, year, durationMs: track.duration_ms || 0, explicit: false, features: false, single: false,
+                    opener: false, closer: false, titleTrack: false, debut: false, latest: false, soundtrack: false, selfTitled: false, albums: [] };
+                songs.set(key, song);
+            }
+            if (year && (!song.year || year < song.year)) song.year = year;
+            if (type === 'album' && song.albums.length === 0) song.durationMs = track.duration_ms || song.durationMs;
+            song.explicit = song.explicit || Boolean(track.explicit);
+            song.features = song.features || (track.artists || []).length > 1;
+            song.single = song.single || type === 'single';
+            if (type === 'album') {
+                song.albums.push(release.name);
+                if (totalTracks >= 4 && track.track_number === 1 && (track.disc_number || 1) === 1) song.opener = true;
+                if (totalTracks >= 4 && track.track_number === totalTracks) song.closer = true;
+                if (matchKey(release.name) === key) song.titleTrack = true;
+                if (release.id === debutId) song.debut = true;
+                if (release.id === latestId) song.latest = true;
+                if (matchKey(release.name) === matchKey(artistName)) song.selfTitled = true;
+            }
+            if (/soundtrack|motion picture|original score|music from (the )?(film|movie|series)|\bost\b/i.test(release.name)) song.soundtrack = true;
+        }
+    }
+    const catalog = {
+        artistId: cacheKey,
+        artist: artistName,
+        releases: kept.length,
+        albums: albums.length,
+        songs: [...songs.values()]
+    };
+    if (catalogCache.size > 200) catalogCache.delete(catalogCache.keys().next().value);
+    catalogCache.set(cacheKey, { at: Date.now(), catalog });
+    return catalog;
+}
+
+const titleWords = song => cleanSongName(song.name).replace(/\([^)]*\)/g, ' ').split(/\s+/).filter(word => /[a-z0-9]/i.test(word));
+const titleHas = (song, pattern) => pattern.test(cleanSongName(song.name));
+
+const SPOTIFY_CATEGORIES = [
+    { id: 'debut', label: 'Song from their debut album', test: song => song.debut },
+    { id: 'latest', label: 'Song from their latest album', test: song => song.latest },
+    { id: 'title-track', label: 'Title track of an album', test: song => song.titleTrack },
+    { id: 'opener', label: 'Opening track of an album', test: song => song.opener },
+    { id: 'closer', label: 'Closing track of an album', test: song => song.closer },
+    { id: 'single', label: 'Released as a single', test: song => song.single },
+    { id: 'features', label: 'Features another artist', test: song => song.features },
+    { id: 'explicit', label: 'Explicit song', test: song => song.explicit },
+    { id: 'self-titled', label: 'From a self-titled album', test: song => song.selfTitled },
+    { id: 'soundtrack', label: 'From a soundtrack', test: song => song.soundtrack },
+    { id: 'long', label: 'Over 5 minutes long', test: song => song.durationMs > 300000 },
+    { id: 'short', label: 'Under 2 minutes 30 seconds', test: song => song.durationMs > 0 && song.durationMs < 150000 },
+    { id: 'one-word', label: 'One-word title', test: song => titleWords(song).length === 1 },
+    { id: 'long-title', label: 'Title of 5 or more words', test: song => titleWords(song).length >= 5 },
+    { id: 'number', label: 'Title with a number', test: song => titleHas(song, /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|hundred|thousand|million|first|second|third)\b/i) },
+    { id: 'question', label: 'Title is a question', test: song => /\?\s*$/.test(song.raw.replace(/\s*[([][^)\]]*[)\]]\s*$/, '')) || /\?$/.test(song.name) },
+    { id: 'color', label: 'Title with a color', test: song => titleHas(song, /\b(red|orange|yellow|green|blue|purple|violet|pink|black|white|gold(en)?|silver|gr[ae]y|brown|scarlet|crimson|lavender)\b/i) },
+    { id: 'love', label: 'Title with the word Love', test: song => titleHas(song, /\blov(e|er|ers|ing|ed|es)\b/i) },
+    { id: 'body', label: 'Title with a body part', test: song => titleHas(song, /\b(heart|hearts|eyes?|hands?|head|lips|face|skin|bones?|teeth|mouth|arms?|feet|foot|hair|knees?|shoulders?|fingers?|legs?|neck|chest|tongue|brain|blood|heartbeat)\b/i) },
+    { id: 'time', label: 'Title with a time of day', test: song => titleHas(song, /\b(morning|night|nights|midnight|tonight|evening|afternoon|sunrise|sunset|dawn|dusk|noon|daylight|\d{1,2} ?(am|pm|a\.m\.|p\.m\.))\b/i) },
+    { id: 'weather', label: 'Title with weather', test: song => titleHas(song, /\b(rain|raining|rainy|sun|sunny|sunshine|snow|storm|stormy|thunder|lightning|wind|windy|cloud|clouds|cloudy|hurricane|fog|rainbow|weather|heatwave|tornado)\b/i) },
+    { id: 'holiday', label: 'Holiday song', test: song => titleHas(song, /\b(christmas|xmas|santa|holiday|jingle|mistletoe|sleigh|reindeer|noel|hanukkah|new year)\b/i) || song.albums.some(name => /christmas|holiday/i.test(name)) }
+];
+
+const AI_CATEGORIES = [
+    { id: 'ai-top10', kind: 'ai', label: 'Top 10 hit on the Hot 100', rule: 'peaked in the top 10 of the US Billboard Hot 100 (as lead or featured artist)' },
+    { id: 'ai-no1', kind: 'ai', label: 'Hit #1 on the Hot 100', rule: 'reached number 1 on the US Billboard Hot 100' },
+    { id: 'ai-grammy', kind: 'ai', label: 'Grammy-nominated song', rule: 'the song itself (not just its album) was nominated for or won a Grammy Award' },
+    { id: 'ai-screen', kind: 'ai', label: 'Heard in a movie or TV show', rule: 'was written for, or prominently used in, a well-known film or TV series' },
+    { id: 'ai-cover', kind: 'ai', label: "Cover of another artist's song", rule: 'is a cover of a song first released by a different artist' },
+    { id: 'ai-place', kind: 'ai', label: 'Mentions a real place', rule: 'the title or lyrics name a real city, state, country or landmark' },
+    { id: 'ai-name', kind: 'ai', label: "Title has a person's name", rule: "the title is or contains a person's first name (real or fictional)" },
+    { id: 'ai-tiktok', kind: 'ai', label: 'Went viral on TikTok', rule: 'had a widely reported viral moment on TikTok' }
+];
+
+const OPINION_CATEGORIES = [
+    { id: 'op-breakup', kind: 'opinion', label: 'Breakup song', rule: 'is about a breakup or the end of a relationship' },
+    { id: 'op-love', kind: 'opinion', label: 'Love song', rule: 'is a romantic love song' },
+    { id: 'op-party', kind: 'opinion', label: 'Party anthem', rule: 'is an upbeat song made for parties or dancing' },
+    { id: 'op-sad', kind: 'opinion', label: 'Sad song', rule: 'is one of their saddest, most heartbreaking songs' },
+    { id: 'op-drive', kind: 'opinion', label: 'Road trip song', rule: 'is about driving, cars or the open road, or is a classic sing-in-the-car song' },
+    { id: 'op-confidence', kind: 'opinion', label: 'Confidence anthem', rule: 'is an empowering, confident or self-love anthem' },
+    { id: 'op-nostalgia', kind: 'opinion', label: 'Nostalgic song', rule: 'is about memories, growing up or looking back' },
+    { id: 'op-revenge', kind: 'opinion', label: 'Revenge or kiss-off song', rule: 'is a revenge, diss or kiss-off song aimed at someone' }
+];
+
+function decadeCategories(songs) {
+    const decades = [...new Set(songs.map(song => song.year).filter(Boolean).map(year => Math.floor(year / 10) * 10))].sort();
+    return decades.map(decade => ({ id: `decade-${decade}`, label: `Released in the ${decade}s`, test: song => song.year >= decade && song.year < decade + 10 }));
+}
+
+function categoryInfo(category, kind) {
+    return { id: category.id, label: category.label, kind: category.kind || kind };
+}
+
+// Songs most people know come first, so lists read well and the AI sees hits
+async function rankSongs(catalog) {
+    let ranks = new Map();
+    try {
+        ranks = await artistTrackRanks(catalog.artist);
+    } catch (error) {
+        console.error('Could not rank songs: ', error.message);
+    }
+    const rankOf = song => {
+        const rank = ranks.get(normalizeTitle(song.name));
+        return rank === undefined ? 1000 : rank;
+    };
+    return [...catalog.songs].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name));
+}
+
+function spotifyCategoryResults(catalog, ranked) {
+    const results = {};
+    [...SPOTIFY_CATEGORIES, ...decadeCategories(catalog.songs)].forEach(category => {
+        results[category.id] = { ...categoryInfo(category, 'spotify'), songs: ranked.filter(category.test).map(song => song.name) };
+    });
+    return results;
+}
+
+// Generic JSON chat call, reusing the title models and their fallbacks
+async function chatJSON(prompt, timeout = 60000) {
+    if (!OPENAI_SECRET) throw new Error('OPENAI_API_KEY is not set');
+    const models = workingTitleModel
+        ? [workingTitleModel, ...TITLE_MODELS.filter(model => model !== workingTitleModel)]
+        : TITLE_MODELS;
+    let lastError = null;
+    for (const model of models) {
+        for (const jsonMode of [true, false]) {
+            try {
+                const body = { model, messages: [{ role: 'user', content: prompt }] };
+                if (jsonMode) body.response_format = { type: 'json_object' };
+                const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
+                    headers: { 'Authorization': `Bearer ${OPENAI_SECRET}`, 'Content-Type': 'application/json' },
+                    timeout
+                });
+                const text = String(response.data.choices[0].message.content || '');
+                const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+                workingTitleModel = model;
+                return json;
+            } catch (error) {
+                lastError = error;
+                const status = error.response ? error.response.status : null;
+                if (status === 401) throw error;
+                if (status === 400 && jsonMode) continue; // model may not support JSON mode: try plain
+                break;
+            }
+        }
+    }
+    throw lastError || new Error('No AI model answered');
+}
+
+const aiCache = new Map();
+
+async function aiCategoryResults(catalog, ranked, kinds) {
+    const wanted = [...(kinds.includes('ai') ? AI_CATEGORIES : []), ...(kinds.includes('opinion') ? OPINION_CATEGORIES : [])];
+    if (!wanted.length || !ranked.length) return {};
+    const cacheKey = `${catalog.artistId}|${wanted.map(category => category.id).join(',')}`;
+    const cached = aiCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.results;
+
+    const list = ranked.slice(0, 350);
+    const prompt = `You are sorting songs for a music trivia game. Artist: ${catalog.artist}.
+For each category below, list the songs from the SONG LIST that fit its rule. Copy titles exactly as they appear in the list, and never add songs that aren't in it. For factual categories only include songs you are confident about. For opinion categories pick the songs most fans would agree with. An empty list is fine.
+Reply with JSON only, shaped like {"category-id": ["Title", "Title"]}.
+
+CATEGORIES
+${wanted.map(category => `${category.id}: ${category.rule}`).join('\n')}
+
+SONG LIST
+${list.map(song => song.name).join('\n')}`;
+    const json = await chatJSON(prompt);
+    const byKey = new Map(list.map(song => [song.key, song.name]));
+    const results = {};
+    wanted.forEach(category => {
+        const picked = Array.isArray(json[category.id]) ? json[category.id] : [];
+        const songs = [...new Set(picked.map(title => byKey.get(matchKey(title))).filter(Boolean))].slice(0, 30);
+        results[category.id] = { ...categoryInfo(category), songs };
+    });
+    if (aiCache.size > 300) aiCache.delete(aiCache.keys().next().value);
+    aiCache.set(cacheKey, { at: Date.now(), results });
+    return results;
+}
+
+// ---------- Slow requests ----------
+// Heroku drops any request that takes 30 seconds to answer, even though the
+// work keeps running. Work that can take that long (reading a whole catalog,
+// asking the AI, finding clips, scoring) runs as a job: if it isn't done
+// after SLOW_REPLY_MS the reply is 202 { pending: true } and the work keeps
+// going. Sending the same request again joins the same job and gets the
+// result once it's ready.
+const SLOW_REPLY_MS = Number(process.env.SLOW_REPLY_MS) || 20000;
+const SLOW_JOB_KEEP_MS = 10 * 60000;
+const slowJobs = new Map();
+
+function slowJob(key, work) {
+    const now = Date.now();
+    for (const [oldKey, old] of slowJobs) {
+        if (old.done && now - old.doneAt > SLOW_JOB_KEEP_MS) slowJobs.delete(oldKey);
+    }
+    let job = slowJobs.get(key);
+    if (!job) {
+        job = { done: false, doneAt: 0, result: null, error: null };
+        job.promise = Promise.resolve().then(work)
+            .then(result => { job.result = result; }, error => { job.error = error; })
+            .finally(() => { job.done = true; job.doneAt = Date.now(); });
+        slowJobs.set(key, job);
+    }
+    return job;
+}
+
+// Waits a while for the job, then answers with send(job), or 202 if it needs
+// longer. A failed job is forgotten once reported, so asking again retries
+// it. once: true also forgets a finished job (for results that go stale).
+async function replyFromJob(res, key, job, send, { once = false } = {}) {
+    if (!job.done) await Promise.race([job.promise, sleep(SLOW_REPLY_MS)]);
+    if (!job.done) return res.status(202).json({ pending: true, retry_ms: 1000 });
+    if ((job.error || once) && slowJobs.get(key) === job) slowJobs.delete(key);
+    return send(job);
+}
+
+function bodyKey(value) {
+    return crypto.createHash('sha256').update(JSON.stringify(value === undefined ? null : value)).digest('hex').slice(0, 24);
+}
+
+// Every category the builder can offer, for labels and grouping
+app.get('/categories', (req, res) => {
+    res.json({
+        min_songs: MIN_CATEGORY_SONGS,
+        categories: [
+            ...SPOTIFY_CATEGORIES.map(category => categoryInfo(category, 'spotify')),
+            { id: 'decade-*', label: 'Released in a decade', kind: 'spotify' },
+            ...AI_CATEGORIES.map(category => categoryInfo(category)),
+            ...OPINION_CATEGORIES.map(category => categoryInfo(category))
+        ]
+    });
+});
+
+// Body: { artistId, artistName, kinds: ['spotify'] | ['ai', 'opinion'] }
+// Returns { artist, songs, categories: { id: { id, label, kind, songs: [...] } } },
+// or 202 { pending: true } while it's still working (send the same body again)
+app.post('/artist-categories', async (req, res) => {
+    const artistId = String(req.body.artistId || '').trim();
+    const artistName = String(req.body.artistName || '').trim().slice(0, 120);
+    const kinds = (Array.isArray(req.body.kinds) ? req.body.kinds : ['spotify']).filter(kind => ['spotify', 'ai', 'opinion'].includes(kind));
+    if (!/^[A-Za-z0-9]{1,40}$/.test(artistId) || !artistName) {
+        return res.status(400).json({ error: 'Send artistId and artistName' });
+    }
+    const key = `artist-categories|${artistId}|${artistName.toLowerCase()}|${[...kinds].sort().join(',')}`;
+    const job = slowJob(key, async () => {
+        const catalog = await artistCatalog(artistId, artistName);
+        const ranked = await rankSongs(catalog);
+        const out = { artist: artistName, artistId, songs: catalog.songs.length, releases: catalog.releases, categories: {} };
+        if (kinds.includes('spotify')) Object.assign(out.categories, spotifyCategoryResults(catalog, ranked));
+        const aiKinds = kinds.filter(kind => kind !== 'spotify');
+        if (aiKinds.length) {
+            try {
+                Object.assign(out.categories, await aiCategoryResults(catalog, ranked, aiKinds));
+            } catch (error) {
+                console.error('AI categories failed: ', error.response ? JSON.stringify(error.response.data).slice(0, 300) : error.message);
+                out.aiError = 'AI categories are unavailable right now';
+            }
+        }
+        return out;
+    });
+    try {
+        await replyFromJob(res, key, job, ({ result, error }) => {
+            if (!error) return res.json(result);
+            console.error('Error checking artist categories: ', error.message);
+            res.status(error.response && error.response.status === 404 ? 404 : 500).json({ error: 'Could not read this artist from Spotify' });
+        });
+    } catch (error) {
+        console.error('Error checking artist categories: ', error.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Could not read this artist from Spotify' });
+    }
+});
+
+// ===================================================================
+// Scoring and answer editing
+// Deeper cuts score more: each square's songs get 6 to 11 points from
+// their rank among the artist's top Spotify results (the same scale the
+// old encoder used). Answers live twice: a raw "Answer" row in the
+// templates table ("Song", "Song") and scored rows in the answers table.
+// ===================================================================
+const crypto = require('crypto');
+let editorSchemaReady = false;
+
+async function ensureEditorSchema() {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS custom_grid_editors (
+            custom_grid_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now())`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS answer_complaints (
+            id SERIAL PRIMARY KEY, kind TEXT NOT NULL, grid_id TEXT NOT NULL, field TEXT NOT NULL,
+            song TEXT NOT NULL, song_key TEXT NOT NULL, player_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(), status TEXT NOT NULL DEFAULT 'pending', decided_at TIMESTAMPTZ,
+            UNIQUE (kind, grid_id, field, song_key, player_id))`);
+        await pool.query('CREATE INDEX IF NOT EXISTS answer_complaints_grid_idx ON answer_complaints (kind, grid_id)');
+        editorSchemaReady = true;
+        console.log('Editor and complaints schema ready');
+    } catch (error) {
+        console.error('Could not set up answer editing tables: ', error.message);
+    }
+}
+ensureEditorSchema();
+
+const hashToken = token => crypto.createHash('sha256').update(String(token)).digest('hex');
+const isAdminRequest = req => Boolean(ADMIN_KEY) && req.get('x-admin-key') === ADMIN_KEY;
+
+async function canEdit(req, kind, gridId) {
+    if (isAdminRequest(req)) return true;
+    if (kind !== 'custom' || !editorSchemaReady) return false;
+    const token = String(req.body.token || '');
+    if (!/^[a-f0-9]{32,64}$/.test(token)) return false;
+    const { rows } = await pool.query('SELECT 1 FROM custom_grid_editors WHERE custom_grid_id = $1 AND token_hash = $2', [String(gridId), hashToken(token)]);
+    return rows.length > 0;
+}
+
+function parseRawAnswers(text) {
+    return (String(text || '').match(/"[^"]*"/g) || []).map(item => item.slice(1, -1)).filter(Boolean);
+}
+
+function cleanAnswerList(songs) {
+    const seen = new Set();
+    const out = [];
+    (Array.isArray(songs) ? songs : []).forEach(song => {
+        const name = String(song || '').replace(/"/g, "'").replace(/\s+/g, ' ').trim().slice(0, 150);
+        const key = matchKey(name) || name.toLowerCase();
+        if (!name || seen.has(key)) return;
+        seen.add(key);
+        out.push(name);
+    });
+    return out.slice(0, 80);
+}
+
+async function scoreSongs(artistName, songs) {
+    let ranks = new Map();
+    try {
+        ranks = await artistTrackRanks(artistName);
+    } catch (error) {
+        console.error('Could not rank songs for scoring: ', error.message);
+    }
+    const pops = songs.map(song => {
+        let rank = ranks.get(normalizeTitle(song));
+        if (rank === undefined) rank = ranks.get('k:' + matchKey(song));
+        return rank === undefined ? 1 : Math.max(1, 100 - rank);
+    });
+    const min = Math.min(...pops);
+    const max = Math.max(...pops);
+    return songs.map((song, i) => ({
+        song,
+        popularity: pops[i],
+        normed: min === max ? 11 : 6 + 5 * Math.round(10 * (1 - ((pops[i] - min) / (max - min)))) / 10
+    }));
+}
+
+// Every daily grid that's the same puzzle (the original and its reruns)
+async function familyIds(gridId) {
+    if (!rotationSchemaReady) return [String(gridId)];
+    const fam = await pool.query(`WITH me AS (SELECT COALESCE(MAX(rerun_of), grid_id) AS fam FROM musicgrid_templates WHERE grid_id::text = $1 GROUP BY grid_id)
+        SELECT DISTINCT t.grid_id::text AS id FROM musicgrid_templates t, me WHERE t.grid_id = me.fam OR t.rerun_of = me.fam`, [String(gridId)]);
+    return fam.rows.length ? fam.rows.map(row => row.id) : [String(gridId)];
+}
+
+async function gridNames(kind, gridId) {
+    const src = HINT_SOURCES[kind];
+    const { rows } = await pool.query(`SELECT field_type, field, field_value FROM ${src.templates}
+        WHERE ${src.templateId}::text = $1::text AND field_type IN ('Artist', 'Category', 'Answer', 'CategoryKind')`, [String(gridId)]);
+    const out = { artists: {}, categories: {}, answers: {}, kinds: {} };
+    rows.forEach(row => {
+        if (row.field_type === 'Artist') out.artists[row.field] = row.field_value;
+        if (row.field_type === 'Category') out.categories[row.field] = row.field_value;
+        if (row.field_type === 'Answer') out.answers[row.field] = parseRawAnswers(row.field_value);
+        if (row.field_type === 'CategoryKind') out.kinds[row.field] = row.field_value;
+    });
+    return out;
+}
+
+// Replace one square's answers (raw list + scored rows) on these grids
+async function writeSquare(kind, gridIds, field, songs, artistName) {
+    const src = HINT_SOURCES[kind];
+    const list = cleanAnswerList(songs);
+    const scored = list.length ? await scoreSongs(artistName, list) : [];
+    const raw = list.map(song => `"${song}"`).join(', ');
+    for (const gridId of gridIds) {
+        const saved = await pool.query(`SELECT song_name, preview_url FROM ${src.answers} WHERE ${src.answerId}::text = $1 AND field = $2`, [gridId, field]);
+        const clips = new Map(saved.rows.filter(row => row.preview_url).map(row => [row.song_name, row.preview_url]));
+        await pool.query(`DELETE FROM ${src.answers} WHERE ${src.answerId}::text = $1 AND field = $2`, [gridId, field]);
+        for (const item of scored) {
+            await pool.query(`INSERT INTO ${src.answers} (${src.answerId}, field, song_name, popularity, normed_score, preview_url)
+                VALUES ($1, $2, $3, $4, $5, $6)`, [kind === 'daily' ? Number(gridId) : gridId, field, item.song, item.popularity, item.normed, clips.get(item.song) || '']);
+        }
+        const updated = await pool.query(`UPDATE ${src.templates} SET field_value = $3
+            WHERE ${src.templateId}::text = $1 AND field_type = 'Answer' AND field = $2`, [gridId, field, raw]);
+        if (!updated.rowCount) {
+            if (kind === 'daily') {
+                await pool.query(`INSERT INTO musicgrid_templates (grid_id, field_type, field, field_value, create_date, reporting_day, is_live${rotationSchemaReady ? ', rerun_of' : ''})
+                    SELECT grid_id, 'Answer', $2, $3, create_date, reporting_day, FALSE${rotationSchemaReady ? ', rerun_of' : ''}
+                    FROM musicgrid_templates WHERE grid_id::text = $1 LIMIT 1`, [gridId, field, raw]);
+            } else {
+                await pool.query(`INSERT INTO custom_templates (custom_grid_id, field_type, field, field_value, grid_title, owner_id)
+                    SELECT custom_grid_id, 'Answer', $2, $3, grid_title, owner_id FROM custom_templates WHERE custom_grid_id::text = $1 LIMIT 1`, [gridId, field, raw]);
+            }
+        }
+    }
+    return list;
+}
+
+// Score every square from the raw answer lists (new grids)
+async function scoreGrid(kind, gridId) {
+    const names = await gridNames(kind, gridId);
+    for (const [field, songs] of Object.entries(names.answers)) {
+        const artist = names.artists[field.split(' ')[1]];
+        if (artist) await writeSquare(kind, [String(gridId)], field, songs, artist);
+    }
+}
+
+// Pending complaints that now match an accepted answer are approved
+async function settleComplaints(kind, gridIds) {
+    if (!editorSchemaReady) return;
+    const src = HINT_SOURCES[kind];
+    await pool.query(`UPDATE answer_complaints c SET status = 'approved', decided_at = now()
+        WHERE c.kind = $1 AND c.grid_id = ANY($2) AND c.status = 'pending' AND EXISTS (
+            SELECT 1 FROM ${src.answers} a WHERE a.${src.answerId}::text = c.grid_id AND a.field = c.field
+            AND ${SQL_TITLE_KEY('a.song_name')} = ${SQL_TITLE_KEY('c.song')})`, [kind, gridIds]);
+}
+
+// ---------- Player-made grids built from the category picker ----------
+// Body: { artists: [{ id, name }] x3, categories: [{ id, label, kind }] x3,
+//         answers: { [categoryId]: { [artistName]: [songs] } } }
+// Returns { custom_grid_id, title, edit_token }. The edit token lets the
+// creator change answers later; only its hash is stored. Send a request_id:
+// sending the same one again (after a 202 or a dropped connection) returns
+// the same grid instead of making a second one.
+const TITLE_WAIT_MS = Number(process.env.TITLE_WAIT_MS) || 12000;
+
+app.post('/custom-grids', async (req, res) => {
+    const artists = Array.isArray(req.body.artists) ? req.body.artists : [];
+    const categories = Array.isArray(req.body.categories) ? req.body.categories : [];
+    const answers = req.body.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+    const nameOk = text => typeof text === 'string' && text.trim() && text.length <= 120 && !text.includes('"');
+    if (artists.length !== 3 || categories.length !== 3 || !artists.every(a => a && nameOk(a.name)) || !categories.every(c => c && nameOk(c.label))) {
+        return res.status(400).json({ error: 'Send 3 artists and 3 categories' });
+    }
+    for (const category of categories) {
+        for (const artist of artists) {
+            const songs = cleanAnswerList(answers[category.id] && answers[category.id][artist.name]);
+            if (songs.length < 1) return res.status(400).json({ error: `No answers for ${artist.name} / ${category.label}` });
+        }
+    }
+    const requestId = /^[A-Za-z0-9-]{8,64}$/.test(String(req.body.request_id || '')) ? req.body.request_id : crypto.randomUUID();
+    const key = `custom-grids|${requestId}`;
+    const job = slowJob(key, () => saveCustomGrid(artists, categories, answers));
+    try {
+        await replyFromJob(res, key, job, ({ result, error }) => {
+            if (!error) return res.json(result);
+            console.error('Error creating custom grid: ', error.message);
+            res.status(500).json({ error: 'Could not save the grid' });
+        });
+    } catch (error) {
+        console.error('Error creating custom grid: ', error.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Could not save the grid' });
+    }
+});
+
+async function saveCustomGrid(artists, categories, answers) {
+    const artistsJoined = artists.map(a => a.name.trim()).join(', ');
+    // A slow title isn't worth a slow save: fall back to the artist names
+    const aiTitle = await Promise.race([generateGridTitle(artistsJoined).catch(() => null), sleep(TITLE_WAIT_MS).then(() => null)]);
+    const title = aiTitle || fallbackTitle(artistsJoined);
+    const token = crypto.randomBytes(24).toString('hex');
+    const client = await pool.connect();
+    let gridId;
+    try {
+        await client.query('BEGIN');
+        await client.query('LOCK TABLE custom_templates IN EXCLUSIVE MODE');
+        gridId = Number((await client.query('SELECT COALESCE(MAX(custom_grid_id), 0) AS id FROM custom_templates')).rows[0].id) + 1;
+        const rows = [];
+        artists.forEach((artist, a) => rows.push(['Artist', `A${a + 1}`, artist.name.trim()]));
+        categories.forEach((category, c) => {
+            rows.push(['Category', `C${c + 1}`, category.label.trim()]);
+            if (['ai', 'opinion'].includes(category.kind)) rows.push(['CategoryKind', `C${c + 1}`, category.kind]);
+        });
+        categories.forEach((category, c) => artists.forEach((artist, a) => {
+            const songs = cleanAnswerList(answers[category.id][artist.name]);
+            rows.push(['Answer', `C${c + 1} A${a + 1}`, songs.map(song => `"${song}"`).join(', ')]);
+        }));
+        for (const [type, field, value] of rows) {
+            await client.query('INSERT INTO custom_templates (custom_grid_id, field_type, field, field_value, grid_title, owner_id) VALUES ($1, $2, $3, $4, $5, $6)',
+                [gridId, type, field, value, title, 'builder']);
+        }
+        if (editorSchemaReady) {
+            // Ids are max + 1, so a deleted grid's id can come back: clear anything left from it
+            await client.query("DELETE FROM answer_complaints WHERE kind = 'custom' AND grid_id = $1", [String(gridId)]);
+            await client.query(`INSERT INTO custom_grid_editors (custom_grid_id, token_hash) VALUES ($1, $2)
+                ON CONFLICT (custom_grid_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, created_at = now()`, [String(gridId), hashToken(token)]);
+        }
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+    try {
+        await scoreGrid('custom', gridId);
+    } catch (err) {
+        console.error('Error scoring custom grid: ', err.message);
+    }
+    return { custom_grid_id: gridId, title, edit_token: editorSchemaReady ? token : null };
+}
+
+// Body: { kind, grid_id, token?, clips? }. Admin key, or the creator's edit
+// token for a player-made grid. clips: true also finds (and saves) a hint
+// clip for every square.
+async function gridAnswersHandler(req, res) {
+    try {
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const gridId = String(req.body.grid_id || '').trim();
+        if (!/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'grid_id must be a number' });
+        if (!(await canEdit(req, kind, gridId))) return res.status(401).json({ error: 'Not allowed to edit this grid' });
+        const withClips = req.body.clips !== false && isAdminRequest(req);
+        if (!withClips) return res.json(await loadGridAnswers(kind, gridId, false));
+        // Finding clips can take a while (iTunes, then Deezer, per square)
+        const key = `grid-answers|${kind}|${gridId}`;
+        const job = slowJob(key, () => loadGridAnswers(kind, gridId, true));
+        await replyFromJob(res, key, job, ({ result, error }) => {
+            if (!error) return res.json(result);
+            console.error('Error loading grid answers: ', error.message);
+            res.status(500).json({ error: 'Error loading grid answers' });
+        }, { once: true });
+    } catch (err) {
+        console.error('Error loading grid answers: ', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Error loading grid answers' });
+    }
+}
+
+async function loadGridAnswers(kind, gridId, withClips) {
+    const src = HINT_SOURCES[kind];
+    const names = await gridNames(kind, gridId);
+    const { rows } = await pool.query(`SELECT field, song_name, normed_score FROM ${src.answers}
+        WHERE ${src.answerId}::text = $1::text ORDER BY field, normed_score ASC, song_name`, [gridId]);
+    const fields = [...new Set([...rows.map(row => row.field), ...Object.keys(names.answers)])].sort();
+    const squares = [];
+    for (const field of fields) {
+        const [category, artist] = field.split(' ');
+        const square = {
+            field,
+            category: names.categories[category] || category,
+            kind: names.kinds[category] || 'spotify',
+            artist: names.artists[artist] || artist,
+            answers: rows.filter(row => row.field === field).map(row => ({ song: row.song_name, points: Number(row.normed_score) }))
+        };
+        if (withClips) {
+            const tried = [];
+            const clip = await hintClip(kind, gridId, field, false, tried).catch(() => null);
+            square.clip = clip ? { url: clip.url, source: clip.source } : null;
+            square.tried = tried;
+        }
+        squares.push(square);
+    }
+    let complaints = [];
+    if (editorSchemaReady) {
+        complaints = (await pool.query(`SELECT field, mode() WITHIN GROUP (ORDER BY song) AS song, song_key, COUNT(*)::int AS players
+            FROM answer_complaints WHERE kind = $1 AND grid_id = $2 AND status = 'pending'
+            GROUP BY field, song_key ORDER BY players DESC LIMIT 50`, [kind, gridId])).rows;
+    }
+    return { kind, grid_id: gridId, squares, complaints };
+}
+app.post('/admin/grid-answers', gridAnswersHandler);
+app.post('/grid-answers', gridAnswersHandler);
+
+// Body: { kind, grid_id, token?, cells: { "C1 A2": ["Song", ...] } }
+// Rewrites those squares and re-scores them. Daily grids change across the
+// original and its reruns.
+app.post('/grid-answers/save', async (req, res) => {
+    try {
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const gridId = String(req.body.grid_id || '').trim();
+        const cells = req.body.cells && typeof req.body.cells === 'object' ? req.body.cells : {};
+        if (!/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'grid_id must be a number' });
+        if (!(await canEdit(req, kind, gridId))) return res.status(401).json({ error: 'Not allowed to edit this grid' });
+        const names = await gridNames(kind, gridId);
+        const changes = [];
+        for (const [field, songs] of Object.entries(cells).slice(0, 25)) {
+            if (!/^C\d+ A\d+$/.test(field)) continue;
+            const artist = names.artists[field.split(' ')[1]];
+            if (!artist) continue;
+            const list = cleanAnswerList(songs);
+            if (!list.length) return res.status(400).json({ error: `Every square needs at least one answer (${field})` });
+            changes.push({ field, list, artist });
+        }
+        // Scoring looks songs up on Spotify, so a big save can run long
+        const key = `save|${kind}|${gridId}|${bodyKey(changes)}`;
+        const job = slowJob(key, async () => {
+            const ids = kind === 'daily' ? await familyIds(gridId) : [gridId];
+            const saved = {};
+            for (const { field, list, artist } of changes) saved[field] = await writeSquare(kind, ids, field, list, artist);
+            await settleComplaints(kind, ids);
+            return { saved, grids: ids };
+        });
+        await replyFromJob(res, key, job, ({ result, error }) => {
+            if (!error) return res.json(result);
+            console.error('Error saving answers: ', error.message);
+            res.status(500).json({ error: 'Error saving answers' });
+        }, { once: true });
+    } catch (err) {
+        console.error('Error saving answers: ', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Error saving answers' });
+    }
+});
+
+// ---------- "I think it fits": players dispute rejected guesses ----------
+async function gridIsPlayable(kind, gridId) {
+    if (kind === 'daily') {
+        const { rows } = await pool.query(`SELECT 1 FROM musicgrid_templates WHERE grid_id::text = $1 GROUP BY grid_id HAVING MAX(reporting_day) <= ${TODAY_SQL}`, [gridId]);
+        return rows.length > 0;
+    }
+    const { rows } = await pool.query('SELECT 1 FROM custom_templates WHERE custom_grid_id::text = $1 LIMIT 1', [gridId]);
+    return rows.length > 0;
+}
+
+// Body: { kind, grid_id, field, song, player_id }
+app.post('/complaints', async (req, res) => {
+    try {
+        if (!editorSchemaReady) return res.status(503).json({ error: 'Not ready yet' });
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const gridId = String(req.body.grid_id || '').trim();
+        const field = String(req.body.field || '');
+        const song = String(req.body.song || '').replace(/\s+/g, ' ').trim().slice(0, 150);
+        const playerId = validPlayerId(req.body.player_id);
+        const key = matchKey(song);
+        if (!/^\d{1,12}$/.test(gridId) || !/^C\d+ A\d+$/.test(field) || !key || !playerId) {
+            return res.status(400).json({ error: 'Send kind, grid_id, field, song and player_id' });
+        }
+        if (!(await gridIsPlayable(kind, gridId))) return res.status(404).json({ error: 'No such grid' });
+        const src = HINT_SOURCES[kind];
+        const accepted = await pool.query(`SELECT 1 FROM ${src.answers} WHERE ${src.answerId}::text = $1 AND field = $2
+            AND ${SQL_TITLE_KEY('song_name')} = ${SQL_TITLE_KEY('$3')} LIMIT 1`, [gridId, field, song]);
+        if (accepted.rows.length) return res.json({ status: 'approved', players: 0 });
+        // A group already decided keeps its verdict for late arrivals
+        const decided = await pool.query(`SELECT status FROM answer_complaints WHERE kind = $1 AND grid_id = $2 AND field = $3 AND song_key = $4
+            AND status <> 'pending' LIMIT 1`, [kind, gridId, field, key]);
+        const status = decided.rows.length ? decided.rows[0].status : 'pending';
+        await pool.query(`INSERT INTO answer_complaints (kind, grid_id, field, song, song_key, player_id, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`, [kind, gridId, field, song, key, playerId, status]);
+        const count = await pool.query(`SELECT COUNT(*)::int AS players FROM answer_complaints WHERE kind = $1 AND grid_id = $2 AND field = $3 AND song_key = $4`,
+            [kind, gridId, field, key]);
+        res.json({ status, players: count.rows[0].players });
+    } catch (err) {
+        console.error('Error saving complaint: ', err.message);
+        res.status(500).json({ error: 'Error saving complaint' });
+    }
+});
+
+const COMPLAINT_STATUS_SQL = `CASE WHEN bool_or(status = 'approved') THEN 'approved' WHEN bool_or(status = 'rejected') THEN 'rejected' ELSE 'pending' END`;
+
+// The most-flagged songs for one grid, with verdicts (shown after finishing)
+app.get('/complaints', async (req, res) => {
+    try {
+        if (!editorSchemaReady) return res.json({ complaints: [] });
+        const kind = req.query.kind === 'custom' ? 'custom' : 'daily';
+        const gridId = String(req.query.grid_id || '').trim();
+        if (!/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'grid_id must be a number' });
+        const { rows } = await pool.query(`SELECT field, mode() WITHIN GROUP (ORDER BY song) AS song, song_key,
+                COUNT(*)::int AS players, ${COMPLAINT_STATUS_SQL} AS status
+            FROM answer_complaints WHERE kind = $1 AND grid_id = $2
+            GROUP BY field, song_key ORDER BY players DESC, MIN(created_at) LIMIT 20`, [kind, gridId]);
+        res.json({ complaints: rows });
+    } catch (err) {
+        console.error('Error listing complaints: ', err.message);
+        res.status(500).json({ error: 'Error listing complaints' });
+    }
+});
+
+// Review queue for the admin page. ?status=pending (default) or all
+app.get('/admin/complaints', requireAdmin, async (req, res) => {
+    try {
+        if (!editorSchemaReady) return res.json({ complaints: [] });
+        const all = req.query.status === 'all';
+        const { rows } = await pool.query(`SELECT kind, grid_id, field, song_key, mode() WITHIN GROUP (ORDER BY song) AS song,
+                COUNT(*)::int AS players, ${COMPLAINT_STATUS_SQL} AS status,
+                to_char(MIN(created_at), 'YYYY-MM-DD') AS first_day, to_char(MAX(created_at), 'YYYY-MM-DD') AS last_day
+            FROM answer_complaints GROUP BY kind, grid_id, field, song_key
+            ${all ? '' : `HAVING ${COMPLAINT_STATUS_SQL} = 'pending'`}
+            ORDER BY players DESC, MAX(created_at) DESC LIMIT 200`);
+        const labels = new Map();
+        for (const row of rows) {
+            const id = `${row.kind}:${row.grid_id}`;
+            if (!labels.has(id)) labels.set(id, await gridNames(row.kind, row.grid_id));
+            const names = labels.get(id);
+            const [category, artist] = row.field.split(' ');
+            row.artist = names.artists[artist] || artist;
+            row.category = names.categories[category] || category;
+            row.answers = names.answers[row.field] || [];
+        }
+        res.json({ complaints: rows });
+    } catch (err) {
+        console.error('Error listing complaints for review: ', err.message);
+        res.status(500).json({ error: 'Error listing complaints' });
+    }
+});
+
+// Body: { kind, grid_id, field, song_key, decision: 'approve' | 'reject' }
+// Approving adds the song as an answer (and re-scores that square).
+app.post('/admin/complaints/decide', requireAdmin, async (req, res) => {
+    try {
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const gridId = String(req.body.grid_id || '').trim();
+        const field = String(req.body.field || '');
+        const songKey = String(req.body.song_key || '');
+        const decision = req.body.decision === 'approve' ? 'approved' : req.body.decision === 'reject' ? 'rejected' : null;
+        if (!decision || !/^\d{1,12}$/.test(gridId) || !/^C\d+ A\d+$/.test(field) || !songKey) {
+            return res.status(400).json({ error: 'Send kind, grid_id, field, song_key and decision' });
+        }
+        const group = await pool.query(`SELECT mode() WITHIN GROUP (ORDER BY song) AS song FROM answer_complaints
+            WHERE kind = $1 AND grid_id = $2 AND field = $3 AND song_key = $4`, [kind, gridId, field, songKey]);
+        const song = group.rows[0] && group.rows[0].song;
+        if (!song) return res.status(404).json({ error: 'No such complaint' });
+        let added = null;
+        if (decision === 'approved') {
+            const names = await gridNames(kind, gridId);
+            const artist = names.artists[field.split(' ')[1]];
+            const current = (await pool.query(`SELECT song_name FROM ${HINT_SOURCES[kind].answers} WHERE ${HINT_SOURCES[kind].answerId}::text = $1 AND field = $2`, [gridId, field]))
+                .rows.map(row => row.song_name);
+            const base = names.answers[field] && names.answers[field].length ? names.answers[field] : current;
+            const ids = kind === 'daily' ? await familyIds(gridId) : [gridId];
+            if (artist) {
+                const list = await writeSquare(kind, ids, field, [...base, cleanSongName(song) || song], artist);
+                added = list.includes(cleanSongName(song) || song) ? (cleanSongName(song) || song) : null;
+            }
+        }
+        await pool.query(`UPDATE answer_complaints SET status = $5, decided_at = now()
+            WHERE kind = $1 AND grid_id = $2 AND field = $3 AND song_key = $4`, [kind, gridId, field, songKey, decision]);
+        res.json({ status: decision, song, added });
+    } catch (err) {
+        console.error('Error deciding complaint: ', err.message);
+        res.status(500).json({ error: 'Error deciding complaint' });
+    }
+});
+
+// The admin page's password screen checks the key here
+app.post('/admin/verify', requireAdmin, (req, res) => res.json({ ok: true }));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
@@ -1199,7 +2131,7 @@ app.post('/custom-grid-data', async (req, res) => {
 });
 
 //Endpoint to get list of grids for administration
-app.get('/fetch-grid-summary', async (req, res) => {
+app.get('/fetch-grid-summary', requireAdmin, async (req, res) => {
     try {
         const query = "SELECT t.grid_id, MAX(t.create_date) AS create_date, MAX(t.reporting_day) AS post_date, COALESCE(MAX(a.updated_at_pst),'1994-05-31 12:00:00'::TIMESTAMP) AS answers_last_updated_pst, STRING_AGG ( DISTINCT CASE WHEN t.field_type = 'Artist' THEN t.field_value ELSE NULL END,', ' ) AS num_artist_cells, STRING_AGG( DISTINCT CASE WHEN t.field_type = 'Category' THEN t.field_value ELSE NULL END,', ' ) AS num_category_cells, COUNT( DISTINCT CASE WHEN t.field_type = 'Answer' THEN t.field ELSE NULL END ) AS num_raw_answer_cells, COUNT(a.*) AS num_encoded_answer, COUNT(DISTINCT a.field) AS num_fields_w_encoded_answers FROM musicgrid_templates t LEFT JOIN musicgrid_answers a ON t.grid_id = a.grid_id AND t.field = a.field GROUP BY 1 ORDER BY 2 DESC, 1 DESC";
         const { rows } = await pool.query(query);
@@ -1459,39 +2391,6 @@ async function gridLabels(src, gridId) {
     return names;
 }
 
-// Body: { kind: 'daily' | 'custom', grid_id }. Finds (and saves) a clip for
-// every square, so it also warms up hints before players get there.
-app.post('/admin/grid-answers', requireAdmin, async (req, res) => {
-    try {
-        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
-        const src = HINT_SOURCES[kind];
-        const gridId = String(req.body.grid_id || '').trim();
-        if (!/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'grid_id must be a number' });
-        const names = await gridLabels(src, gridId);
-        const { rows } = await pool.query(`SELECT field, song_name, normed_score FROM ${src.answers}
-            WHERE ${src.answerId}::text = $1::text ORDER BY field, normed_score ASC, song_name`, [gridId]);
-        const fields = [...new Set(rows.map(row => row.field))].sort();
-        const squares = [];
-        for (const field of fields) {
-            const [category, artist] = field.split(' ');
-            const tried = [];
-            const clip = await hintClip(kind, gridId, field, false, tried).catch(() => null);
-            squares.push({
-                field,
-                category: names[category] || category,
-                artist: names[artist] || artist,
-                answers: rows.filter(row => row.field === field).map(row => ({ song: row.song_name, points: Number(row.normed_score) })),
-                clip: clip ? { url: clip.url, source: clip.source } : null,
-                tried
-            });
-        }
-        res.json({ kind, grid_id: gridId, squares });
-    } catch (err) {
-        console.error('Error loading grid answers: ', err.message);
-        res.status(500).json({ error: 'Error loading grid answers' });
-    }
-});
-
 // Body: { kind, grid_id, field, song }. For a daily grid this also removes
 // the song from its reruns and original (same puzzle), and from the raw
 // answer list so re-scoring doesn't bring it back.
@@ -1588,12 +2487,21 @@ app.post('/artist-clips', async (req, res) => {
     try {
         const names = (Array.isArray(req.body.artists) ? req.body.artists : [])
             .filter(name => typeof name === 'string' && name.trim() && name.length <= 120).slice(0, 12);
-        const results = [];
-        for (const name of names) results.push(await checkArtistClips(name.trim()));
-        res.json({ artists: results });
+        // Unchecked artists each wait on iTunes (and maybe Deezer), so this can run long
+        const key = `artist-clips|${bodyKey(names.map(name => name.trim().toLowerCase()))}`;
+        const job = slowJob(key, async () => {
+            const results = [];
+            for (const name of names) results.push(await checkArtistClips(name.trim()));
+            return { artists: results };
+        });
+        await replyFromJob(res, key, job, ({ result, error }) => {
+            if (!error) return res.json(result);
+            console.error('Error checking artist clips: ', error.message);
+            res.status(500).send('Error checking artist clips');
+        });
     } catch (err) {
         console.error('Error checking artist clips: ', err.message);
-        res.status(500).send('Error checking artist clips');
+        if (!res.headersSent) res.status(500).send('Error checking artist clips');
     }
 });
 
