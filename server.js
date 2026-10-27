@@ -685,6 +685,25 @@ app.post('/player-games/sync', async (req, res) => {
     }
 });
 
+// One grid's saved game for this player, so a device that hasn't played it
+// can show the finished game from another one. Body: { player_id, mode,
+// grid_id }. A POST, so the player code stays out of the request logs.
+app.post('/player-games/one', async (req, res) => {
+    const playerId = validPlayerId(req.body.player_id);
+    const mode = req.body.mode === 'custom' ? 'custom' : req.body.mode === 'daily' ? 'daily' : null;
+    const gridId = String(req.body.grid_id || '');
+    if (!playerId || !mode || !/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'Send player_id, mode and grid_id' });
+    if (!gamesSchemaReady) return res.json({ game: null });
+    try {
+        const { rows } = await pool.query(`SELECT mode, grid_id, score, state FROM player_games
+            WHERE player_id = $1 AND mode = $2 AND grid_id = $3`, [playerId, mode, gridId]);
+        res.json({ game: rows.length ? { ...rows[0], score: Number(rows[0].score) } : null });
+    } catch (err) {
+        console.error('Error loading a saved game: ', err.message);
+        res.status(500).json({ error: 'Could not load the saved game' });
+    }
+});
+
 // ===================================================================
 // Apple Music sign-in (MusicKit on the Web)
 // The grid builder can read a player's Apple Music listening to pick
