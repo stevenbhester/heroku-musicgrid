@@ -55,7 +55,11 @@ async function getSpotifyAccessToken() {
 // Since February 2026, Development Mode apps get a 400 ("Invalid limit") for
 // any limit above 10 on Search and on Get Artist's Albums, so page by 10.
 const SPOTIFY_PAGE_LIMIT = 10;
-const MAX_ARTIST_ALBUMS = 50;
+// Releases read per artist. Albums and singles are listed separately, since
+// Spotify puts every album first: an artist with 50+ albums would otherwise
+// never get to their singles.
+const MAX_ARTIST_ALBUMS = 35;
+const MAX_ARTIST_SINGLES = 15;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -200,7 +204,12 @@ const CLAUDE_MODELS = [process.env.ANTHROPIC_MODEL, 'claude-haiku-5-5', 'claude-
     .filter((model, index, all) => model && all.indexOf(model) === index);
 let workingClaudeModel = null;
 
-async function claudeText(prompt, { maxTokens = 1024, timeout = 60000, system = null, messages = null } = {}) {
+async function claudeText(prompt, options = {}) {
+    return (await claudeReply(prompt, options)).text;
+}
+
+// The reply text and why it stopped ("end_turn", or "max_tokens" when cut off)
+async function claudeReply(prompt, { maxTokens = 1024, timeout = 60000, system = null, messages = null } = {}) {
     if (!ANTHROPIC_SECRET) throw new Error('ANTHROPIC_API_KEY is not set');
     const models = workingClaudeModel
         ? [workingClaudeModel, ...CLAUDE_MODELS.filter(model => model !== workingClaudeModel)]
@@ -216,7 +225,7 @@ async function claudeText(prompt, { maxTokens = 1024, timeout = 60000, system = 
             });
             const text = (response.data.content || []).filter(block => block.type === 'text').map(block => block.text).join('');
             workingClaudeModel = model;
-            return text;
+            return { text, stop: response.data.stop_reason || null };
         } catch (error) {
             lastError = error;
             const status = error.response ? error.response.status : null;
@@ -230,9 +239,26 @@ async function claudeText(prompt, { maxTokens = 1024, timeout = 60000, system = 
     throw lastError || new Error('No Claude model answered');
 }
 
+// The JSON object in a reply. A reply cut off partway keeps every list that
+// finished: it's closed after the last complete one.
 function jsonFrom(text) {
     const body = String(text || '');
-    return JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1));
+    const start = body.indexOf('{');
+    if (start < 0) throw new Error('no JSON in the reply');
+    try {
+        return JSON.parse(body.slice(start, body.lastIndexOf('}') + 1));
+    } catch (error) {
+        const rest = body.slice(start);
+        let end = rest.lastIndexOf(']');
+        for (let tries = 0; end > 0 && tries < 60; tries++) {
+            try {
+                return JSON.parse(rest.slice(0, end + 1) + '}');
+            } catch (inner) {
+                end = rest.lastIndexOf(']', end - 1);
+            }
+        }
+        throw new Error('the reply is not valid JSON');
+    }
 }
 const BROKEN_TITLES = ['AI Failure Fallback Title', 'AI Error, No Fun Name', 'Placeholder Title', 'Fallback Grid Title'];
 
@@ -1692,14 +1718,18 @@ async function artistCatalog(artistId, artistName) {
     if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.catalog;
 
     const releases = [];
-    let total = 1;
-    for (let offset = 0; offset < Math.min(total, MAX_ARTIST_ALBUMS); offset += SPOTIFY_PAGE_LIMIT) {
-        const page = await spotifyGet(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${offset}`);
-        total = page.total || 0;
-        releases.push(...(page.items || []));
-        if (!page.items || page.items.length < SPOTIFY_PAGE_LIMIT) break;
+    for (const [group, max] of [['album', MAX_ARTIST_ALBUMS], ['single', MAX_ARTIST_SINGLES]]) {
+        let total = 1;
+        for (let offset = 0; offset < Math.min(total, max); offset += SPOTIFY_PAGE_LIMIT) {
+            const page = await spotifyGet(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${group}&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${offset}`);
+            total = page.total || 0;
+            releases.push(...(page.items || []).slice(0, max - offset));
+            if (!page.items || page.items.length < SPOTIFY_PAGE_LIMIT) break;
+        }
     }
-    const kept = releases.filter(release => release && release.name && !SKIP_RELEASE.test(release.name));
+    const seenRelease = new Set();
+    const kept = releases.filter(release => release && release.name && !SKIP_RELEASE.test(release.name)
+        && !seenRelease.has(release.id) && seenRelease.add(release.id));
     const albums = kept.filter(release => (release.album_type || 'album') === 'album')
         .sort((a, b) => String(a.release_date).localeCompare(String(b.release_date)));
     const debutId = albums.length ? albums[0].id : null;
@@ -1841,13 +1871,44 @@ function spotifyCategoryResults(catalog, ranked) {
     return results;
 }
 
-// Generic JSON call to Claude
+// Generic JSON call to Claude. An unusable reply is tried once more, and the
+// log says why it failed (cut off, or what it started with).
 async function chatJSON(prompt, timeout = 60000) {
     if (!ANTHROPIC_SECRET) throw new Error('ANTHROPIC_API_KEY is not set');
-    return jsonFrom(await claudeText(prompt, { maxTokens: 8000, timeout }));
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const ask = attempt ? `${prompt}\n\nReply with only the JSON object, starting with {.` : prompt;
+        const reply = await claudeReply(ask, { maxTokens: 8000, timeout });
+        try {
+            return jsonFrom(reply.text);
+        } catch (error) {
+            const why = reply.stop === 'max_tokens' ? 'cut off at the length limit' : `stopped: ${reply.stop || 'unknown'}`;
+            lastError = new Error(`${error.message} (${why}, ${reply.text.length} characters, starts ${JSON.stringify(reply.text.slice(0, 100))})`);
+            console.error(`Claude JSON reply ${attempt + 1} unusable: ${lastError.message}`);
+        }
+    }
+    throw lastError;
 }
 
 const aiCache = new Map();
+
+// Categories go to Claude in small batches, side by side, so each reply stays
+// short (a long one can get cut off). A batch that fails leaves only its own
+// categories empty; if every batch fails, the caller reports AI as down.
+const AI_BATCH = 5;
+const AI_MAX_PER_CATEGORY = 25;
+
+function aiPrompt(artist, categories, list) {
+    return `You are sorting songs for a music trivia game. Artist: ${artist}.
+For each category below, list the songs from the SONG LIST that fit its rule. Copy titles exactly as they appear in the list, and never add songs that aren't in it. For factual categories only include songs you are confident about. For opinion categories pick the songs most fans would agree with. List at most ${AI_MAX_PER_CATEGORY} songs per category. An empty list is fine.
+Reply with JSON only, shaped like {"category-id": ["Title", "Title"]}.
+
+CATEGORIES
+${categories.map(category => `${category.id}: ${category.rule}`).join('\n')}
+
+SONG LIST
+${list.map(song => song.name).join('\n')}`;
+}
 
 async function aiCategoryResults(catalog, ranked, kinds) {
     const wanted = [...(kinds.includes('ai') ? AI_CATEGORIES : []), ...(kinds.includes('opinion') ? OPINION_CATEGORIES : [])];
@@ -1857,25 +1918,28 @@ async function aiCategoryResults(catalog, ranked, kinds) {
     if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.results;
 
     const list = ranked.slice(0, 350);
-    const prompt = `You are sorting songs for a music trivia game. Artist: ${catalog.artist}.
-For each category below, list the songs from the SONG LIST that fit its rule. Copy titles exactly as they appear in the list, and never add songs that aren't in it. For factual categories only include songs you are confident about. For opinion categories pick the songs most fans would agree with. An empty list is fine.
-Reply with JSON only, shaped like {"category-id": ["Title", "Title"]}.
+    const batches = [];
+    for (let i = 0; i < wanted.length; i += AI_BATCH) batches.push(wanted.slice(i, i + AI_BATCH));
+    const replies = await Promise.all(batches.map(batch => chatJSON(aiPrompt(catalog.artist, batch, list))
+        .then(json => ({ batch, json }), error => ({ batch, error }))));
+    const failed = replies.filter(reply => reply.error);
+    if (failed.length === replies.length) throw failed[0].error;
+    if (failed.length) console.error(`AI categories: ${failed.length} of ${replies.length} batches failed for ${catalog.artist}: ${failed[0].error.message}`);
 
-CATEGORIES
-${wanted.map(category => `${category.id}: ${category.rule}`).join('\n')}
-
-SONG LIST
-${list.map(song => song.name).join('\n')}`;
-    const json = await chatJSON(prompt);
     const byKey = new Map(list.map(song => [song.key, song.name]));
     const results = {};
-    wanted.forEach(category => {
-        const picked = Array.isArray(json[category.id]) ? json[category.id] : [];
-        const songs = [...new Set(picked.map(title => byKey.get(matchKey(title))).filter(Boolean))].slice(0, 30);
-        results[category.id] = { ...categoryInfo(category), songs };
+    replies.forEach(({ batch, json }) => {
+        batch.forEach(category => {
+            const picked = json && Array.isArray(json[category.id]) ? json[category.id] : [];
+            const songs = [...new Set(picked.map(title => byKey.get(matchKey(String(title)))).filter(Boolean))].slice(0, 30);
+            results[category.id] = { ...categoryInfo(category), songs };
+        });
     });
-    if (aiCache.size > 300) aiCache.delete(aiCache.keys().next().value);
-    aiCache.set(cacheKey, { at: Date.now(), results });
+    // Only a complete answer is kept, so a partial one is asked again next time
+    if (!failed.length) {
+        if (aiCache.size > 300) aiCache.delete(aiCache.keys().next().value);
+        aiCache.set(cacheKey, { at: Date.now(), results });
+    }
     return results;
 }
 
@@ -3251,7 +3315,7 @@ app.post('/rich-artist-lookup-v2', async (req, res) => {
         console.log("Fetching /artists/artistId/albums for "+artistId);
         // Page through up to 50 albums, 10 at a time (Spotify's current cap).
         const albumItems = [];
-        for (albumOffset = 0; albumOffset < Math.min(totalAlbums, MAX_ARTIST_ALBUMS); albumOffset += SPOTIFY_PAGE_LIMIT) {
+        for (albumOffset = 0; albumOffset < Math.min(totalAlbums, MAX_ARTIST_ALBUMS + MAX_ARTIST_SINGLES); albumOffset += SPOTIFY_PAGE_LIMIT) {
             const albumPage = await spotifyGet(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=${encodeURIComponent(searchGroups)}&market=US&limit=${SPOTIFY_PAGE_LIMIT}&offset=${albumOffset}`);
             totalAlbums = albumPage.total;
             albumItems.push(...albumPage.items);
