@@ -490,8 +490,10 @@ app.post('/schedule-grid', requireAdmin, async (req, res) => {
 app.get('/grid-calendar', async (req, res) => {
     try {
         const days = Math.min(Math.max(Number(req.query.days) || 21, 1), 90);
+        const isAdmin = !ADMIN_KEY || req.get('x-admin-key') === ADMIN_KEY;
         const today = (await pool.query(`SELECT to_char(${TODAY_SQL}, 'YYYY-MM-DD') AS today`)).rows[0].today;
         const { rows } = await pool.query(`SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS day, bool_or(is_live) AS live,
+                MAX(CASE WHEN field_type = 'Title' THEN field_value END) AS title,
                 STRING_AGG(DISTINCT CASE WHEN field_type = 'Artist' THEN field_value END, ', ') AS artists
             FROM musicgrid_templates WHERE reporting_day IS NOT NULL GROUP BY grid_id`);
         const calendar = [];
@@ -501,17 +503,172 @@ app.get('/grid-calendar', async (req, res) => {
             const candidates = rows.filter(row => row.day <= date)
                 .sort((a, b) => (b.day.localeCompare(a.day)) || ((b.live ? 1 : 0) - (a.live ? 1 : 0)) || (Number(b.grid_id) - Number(a.grid_id)));
             const pick = candidates[0];
-            calendar.push({
-                date,
-                grid_id: pick ? pick.grid_id : null,
-                artists: pick ? pick.artists : null,
-                scheduled: Boolean(pick && pick.day === date)
-            });
+            // Upcoming artists and titles are spoilers, so only the admin page sees them
+            const entry = { date, scheduled: Boolean(pick && pick.day === date) };
+            if (isAdmin) {
+                entry.grid_id = pick ? pick.grid_id : null;
+                entry.artists = pick ? pick.artists : null;
+                entry.title = pick ? pick.title : null;
+            }
+            calendar.push(entry);
         }
         res.json({ today, timezone: GRID_TIMEZONE, calendar });
     } catch (err) {
         console.error('Error building grid calendar: ', err.message);
         res.status(500).send('Error building grid calendar');
+    }
+});
+
+// ===================================================================
+// Create daily grids from the admin page (paste or upload JSON)
+// Body: { grids: [{ date, title?, artists: [3], categories: [3],
+//                   answers: { [category]: { [artist]: [songs] } } }] }
+// ===================================================================
+function validateGridInput(grid, index) {
+    const where = `Grid ${index + 1}`;
+    if (!grid || typeof grid !== 'object') return `${where} isn't an object`;
+    if (!validDay(grid.date)) return `${where}: date must look like 2026-11-03`;
+    if (grid.title !== undefined && (typeof grid.title !== 'string' || grid.title.length > 60)) return `${where}: title must be text under 60 characters`;
+    for (const key of ['artists', 'categories']) {
+        const list = grid[key];
+        if (!Array.isArray(list) || list.length !== 3 || list.some(item => typeof item !== 'string' || !item.trim() || item.length > 120)) {
+            return `${where}: ${key} must be a list of 3 names`;
+        }
+        if (new Set(list.map(item => item.trim().toLowerCase())).size !== 3) return `${where}: ${key} has a duplicate`;
+    }
+    if (!grid.answers || typeof grid.answers !== 'object') return `${where}: answers are missing`;
+    for (const category of grid.categories) {
+        for (const artist of grid.artists) {
+            const songs = grid.answers[category] && grid.answers[category][artist];
+            if (!Array.isArray(songs) || !songs.length) return `${where}: no answers for ${artist} / ${category}`;
+            const bad = songs.find(song => typeof song !== 'string' || !song.trim() || song.includes('"') || song.length > 150);
+            if (bad !== undefined) return `${where}: answer ${JSON.stringify(bad)} for ${artist} / ${category} can't be empty or contain double quotes`;
+        }
+    }
+    return null;
+}
+
+app.post('/admin/create-grids', requireAdmin, async (req, res) => {
+    const grids = Array.isArray(req.body) ? req.body : req.body.grids;
+    if (!Array.isArray(grids) || !grids.length || grids.length > 31) {
+        return res.status(400).json({ error: 'Send { "grids": [...] } with 1 to 31 grids' });
+    }
+    for (let i = 0; i < grids.length; i++) {
+        const problem = validateGridInput(grids[i], i);
+        if (problem) return res.status(400).json({ error: problem });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('LOCK TABLE musicgrid_templates IN EXCLUSIVE MODE');
+        let nextId = Number((await client.query('SELECT COALESCE(MAX(grid_id), 0) AS id FROM musicgrid_templates')).rows[0].id) + 1;
+        const created = [];
+        for (const grid of grids) {
+            const gridId = nextId++;
+            const rows = [];
+            if (grid.title && grid.title.trim()) rows.push(['Title', 'T1', grid.title.trim()]);
+            grid.artists.forEach((artist, a) => rows.push(['Artist', `A${a + 1}`, artist.trim()]));
+            grid.categories.forEach((category, c) => rows.push(['Category', `C${c + 1}`, category.trim()]));
+            grid.categories.forEach((category, c) => {
+                grid.artists.forEach((artist, a) => {
+                    const songs = [...new Set(grid.answers[category][artist].map(song => song.trim()))];
+                    // Same format as custom grids and the admin encoder: "Song", "Song"
+                    rows.push(['Answer', `C${c + 1} A${a + 1}`, songs.map(song => `"${song}"`).join(', ')]);
+                });
+            });
+            for (const [fieldType, field, value] of rows) {
+                await client.query(`INSERT INTO musicgrid_templates (grid_id, field_type, field, field_value, create_date, reporting_day, is_live)
+                    VALUES ($1, $2, $3, $4, ${TODAY_SQL}, $5::date, FALSE)`, [gridId, fieldType, field, value, grid.date]);
+            }
+            created.push({ grid_id: gridId, date: grid.date, title: grid.title || null });
+        }
+        await client.query('COMMIT');
+        res.json({ created });
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('Error creating grids: ', err.message);
+        res.status(500).json({ error: 'Error creating grids: ' + err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// ===================================================================
+// Browse: past daily grids and player-made grids
+// ===================================================================
+function playersSql(idExpression, board) {
+    if (leaderboardSchemaReady) {
+        return `(SELECT COUNT(DISTINCT COALESCE(l.player_id, lower(trim(l.player_name)))) FROM leaderboard_playerscores l
+            WHERE l.owning_grid_id::text = ${idExpression} AND l.board_type = '${board}')`;
+    }
+    return `(SELECT COUNT(DISTINCT lower(trim(l.player_name))) FROM leaderboard_playerscores l WHERE l.owning_grid_id::text = ${idExpression})`;
+}
+
+function pageParams(req) {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 24, 1), 60);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    return { limit, offset };
+}
+
+// Daily grids that have already played, newest first (one per day).
+app.get('/grids/daily', async (req, res) => {
+    try {
+        const { limit, offset } = pageParams(req);
+        const { rows } = await pool.query(`WITH grids AS (
+                SELECT grid_id, MAX(reporting_day) AS day, bool_or(is_live) AS live,
+                    MAX(CASE WHEN field_type = 'Title' THEN field_value END) AS title,
+                    ARRAY_AGG(field_value ORDER BY field) FILTER (WHERE field_type = 'Artist') AS artists,
+                    ARRAY_AGG(field_value ORDER BY field) FILTER (WHERE field_type = 'Category') AS categories
+                FROM musicgrid_templates GROUP BY grid_id
+                HAVING MAX(reporting_day) <= ${TODAY_SQL}
+            ), played AS (
+                SELECT DISTINCT ON (day) * FROM grids ORDER BY day DESC, live DESC, grid_id DESC
+            )
+            SELECT grid_id, to_char(day, 'YYYY-MM-DD') AS day, title, artists, categories,
+                ${playersSql('played.grid_id::text', 'daily')} AS players
+            FROM played ORDER BY day DESC LIMIT $1 OFFSET $2`, [limit + 1, offset]);
+        res.json({
+            grids: rows.slice(0, limit).map(row => ({ ...row, players: Number(row.players) })),
+            hasMore: rows.length > limit
+        });
+    } catch (err) {
+        console.error('Error listing daily grids: ', err.message);
+        res.status(500).send('Error listing daily grids');
+    }
+});
+
+// Player-made grids that finished building, newest first.
+// ?ids=4,9,12 looks up just those grids (the stats page uses it for titles).
+app.get('/grids/custom', async (req, res) => {
+    try {
+        const { limit, offset } = pageParams(req);
+        const ids = String(req.query.ids || '').split(',').map(id => id.trim())
+            .filter(id => /^\d{1,12}$/.test(id)).slice(0, 100);
+        const params = [limit + 1, offset];
+        if (ids.length) params.push(ids);
+        const { rows } = await pool.query(`WITH grids AS (
+                SELECT c.custom_grid_id, MAX(c.grid_title) AS title,
+                    ARRAY_AGG(c.field_value ORDER BY c.field) FILTER (WHERE c.field_type = 'Artist') AS artists
+                FROM custom_templates c
+                WHERE EXISTS (SELECT 1 FROM custom_answers a WHERE a.custom_grid_id::text = c.custom_grid_id::text)
+                    ${ids.length ? 'AND c.custom_grid_id::text = ANY($3)' : ''}
+                GROUP BY c.custom_grid_id
+            )
+            SELECT custom_grid_id, title, artists,
+                ${playersSql("(grids.custom_grid_id::text || '100')", 'custom')} AS players
+            FROM grids ORDER BY custom_grid_id DESC LIMIT $1 OFFSET $2`, params);
+        res.json({
+            grids: rows.slice(0, limit).map(row => ({
+                ...row,
+                // Grids built while the title model was broken get their artists as a title
+                title: !row.title || BROKEN_TITLES.includes(row.title) ? fallbackTitle((row.artists || []).join(', ')) : row.title,
+                players: Number(row.players)
+            })),
+            hasMore: rows.length > limit
+        });
+    } catch (err) {
+        console.error('Error listing custom grids: ', err.message);
+        res.status(500).send('Error listing custom grids');
     }
 });
 
@@ -725,6 +882,16 @@ app.get('/latest-grid', async (req, res) => {
             HAVING MAX(reporting_day) <= ${TODAY_SQL}
             ORDER BY MAX(reporting_day) DESC, bool_or(is_live) DESC, grid_id DESC
             LIMIT 1`;
+        if (req.query.grid_id !== undefined) {
+            // A specific past grid from the archive. Future grids stay hidden.
+            const past = await pool.query(`SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS reporting_day
+                FROM musicgrid_templates WHERE grid_id::text = $1::text
+                GROUP BY grid_id HAVING MAX(reporting_day) <= ${TODAY_SQL}`, [String(req.query.grid_id)]);
+            if (!past.rows.length) {
+                return res.status(404).json({ error: 'That grid is not available' });
+            }
+            return res.json({ latestGridId: past.rows[0].grid_id, reportingDay: past.rows[0].reporting_day });
+        }
         const result = await pool.query(query);
         if (!result.rows.length) {
             return res.status(404).json({ error: 'No grid is scheduled yet' });
@@ -755,6 +922,13 @@ app.post('/set-grid-live', requireAdmin, async (req, res) => {
 app.post('/grid-data', async (req, res) => {
     try {
         const { grid_id } = req.body;
+        // Scheduled grids stay secret until their day, except for the admin page.
+        if (ADMIN_KEY && req.get('x-admin-key') !== ADMIN_KEY) {
+            const future = await pool.query(`SELECT 1 FROM musicgrid_templates WHERE grid_id = $1 GROUP BY grid_id HAVING MAX(reporting_day) > ${TODAY_SQL}`, [grid_id]);
+            if (future.rows.length) {
+                return res.status(404).send('Grid not available yet');
+            }
+        }
         const query = 'SELECT field_type, field, field_value FROM musicgrid_templates WHERE grid_id = $1 ORDER BY field_type ASC, field ASC'; // Replace with your actual query
         const { rows } = await pool.query(query, [grid_id]);
         res.json(rows);
