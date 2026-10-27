@@ -450,8 +450,10 @@ async function gridBoard(lbId, board, playerId, limit) {
     };
 }
 
-// All-time: each player's best score on each daily grid, added up.
-async function allTimeBoard(playerId, limit) {
+// All-time: each player's best score on each daily grid, added up. One
+// page of rows (offset, limit) plus the player's own row wherever it is.
+// Each entry carries its position, so the page can stitch pages together.
+async function allTimeBoard(playerId, limit, offset = 0) {
     const { rows } = await pool.query(`WITH ${scoresCte()},
         daily AS (
             SELECT ${PLAYER_KEY} AS pkey, player_name, gid, score, submitted_at FROM scores WHERE board_type = 'daily'
@@ -469,11 +471,13 @@ async function allTimeBoard(playerId, limit) {
                 COUNT(*) OVER () AS players
             FROM totals
         )
-        SELECT rank, player_name, total, grids, pkey = $1 AS me, players FROM ranked
-        WHERE rn <= $2 OR pkey = $1 ORDER BY rn`, [playerId, limit]);
+        SELECT rank, rn, player_name, total, grids, pkey = $1 AS me, players FROM ranked
+        WHERE (rn > $3 AND rn <= $3 + $2) OR pkey = $1 ORDER BY rn`, [playerId, limit, offset]);
+    const players = rows.length ? Number(rows[0].players) : 0;
     return {
-        players: rows.length ? Number(rows[0].players) : 0,
-        entries: rows.map(row => ({ rank: Number(row.rank), player_name: String(row.player_name).trim(), total: Number(row.total), grids: Number(row.grids), me: row.me === true }))
+        players,
+        hasMore: offset + limit < players,
+        entries: rows.map(row => ({ rank: Number(row.rank), pos: Number(row.rn), player_name: String(row.player_name).trim(), total: Number(row.total), grids: Number(row.grids), me: row.me === true }))
     };
 }
 
@@ -522,10 +526,11 @@ app.post('/leaderboards', async (req, res) => {
         const board = req.body.board === 'custom' ? 'custom' : 'daily';
         const playerId = validPlayerId(req.body.player_id);
         const limit = Math.min(Number(req.body.limit) || 10, 50);
+        const allTimeLimit = Math.min(Number(req.body.all_time_limit) || limit, 100);
         const wantRecent = req.body.recent === true && board === 'daily';
         const [grid, allTime, recent] = await Promise.all([
             lbId === undefined || lbId === null ? { players: 0, entries: [] } : gridBoard(lbId, board, playerId, limit),
-            allTimeBoard(playerId, limit),
+            allTimeBoard(playerId, allTimeLimit),
             wantRecent ? recentBoard(lbId, playerId, limit).catch(error => {
                 console.error('Recent board failed: ', error.message);
                 return null;
@@ -535,6 +540,19 @@ app.post('/leaderboards', async (req, res) => {
     } catch (err) {
         console.error('Error loading leaderboards: ', err.message);
         res.status(500).send('Error loading leaderboards');
+    }
+});
+
+// More of the all-time board. Body: { player_id, offset, limit }
+app.post('/leaderboards/all-time', async (req, res) => {
+    try {
+        const playerId = validPlayerId(req.body.player_id);
+        const offset = Math.max(0, Math.floor(Number(req.body.offset) || 0));
+        const limit = Math.min(Math.max(1, Math.floor(Number(req.body.limit) || 50)), 100);
+        res.json(await allTimeBoard(playerId, limit, offset));
+    } catch (err) {
+        console.error('Error loading the all-time board: ', err.message);
+        res.status(500).send('Error loading the all-time board');
     }
 });
 
