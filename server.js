@@ -5,7 +5,6 @@ const cors = require('cors');
 const app = express();
 const { OpenAI } = require('openai');
 
-
 app.use(express.json());
 const corsOptions ={
    origin:'*',
@@ -22,9 +21,15 @@ const OPENAI_SECRET = process.env.OPENAI_API_KEY;
 // PostgreSQL connection using Pool
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
+    ssl: process.env.PGSSLMODE === 'disable' ? false : {
         rejectUnauthorized: false // Necessary for Heroku
     }
+});
+
+// Without this, a dropped idle database connection (Heroku Postgres
+// maintenance, a network blip) crashes the whole server process.
+pool.on('error', error => {
+    console.error('Idle database connection error: ', error.message);
 });
 
 
@@ -160,6 +165,417 @@ app.post('/search-artists', async (req, res) => {
     }
 });
 
+// ===================================================================
+// Admin access
+// Set ADMIN_KEY in the Heroku config vars to lock the admin-only
+// endpoints. The admin page asks for the key once and sends it as an
+// x-admin-key header. Until ADMIN_KEY is set, these stay open as before.
+// ===================================================================
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+
+function requireAdmin(req, res, next) {
+    if (!ADMIN_KEY || req.get('x-admin-key') === ADMIN_KEY) {
+        return next();
+    }
+    res.status(401).json({ error: 'Admin key required' });
+}
+
+// The daily grid flips at midnight in this time zone (not Heroku's UTC).
+const GRID_TIMEZONE = process.env.GRID_TIMEZONE || 'America/Chicago';
+const TODAY_SQL = `(now() AT TIME ZONE '${GRID_TIMEZONE.replace(/'/g, '')}')::date`;
+
+// ===================================================================
+// Grid titles (OpenAI)
+// gpt-4-turbo-preview was shut down on March 26, 2026. Try a few current
+// models in order and remember the first one that works, so the next
+// retirement doesn't break titles again. OPENAI_TITLE_MODEL overrides.
+// ===================================================================
+const TITLE_MODELS = [process.env.OPENAI_TITLE_MODEL, 'gpt-5.6-terra', 'gpt-6-luna', 'gpt-4.1-mini']
+    .filter((model, index, all) => model && all.indexOf(model) === index);
+let workingTitleModel = null;
+const BROKEN_TITLES = ['AI Failure Fallback Title', 'AI Error, No Fun Name', 'Placeholder Title', 'Fallback Grid Title'];
+
+function titlePrompt(artistsJoined) {
+    return `Your job is to create a clever, witty name for a custom trivia grid a user just created in my game, MusicGrid. The larger game is to guess songs that match categories and artists. There are 3 columns, each with one artist, and 3 rows, each with one category; users guess a song that matches the column's artist and the row's category. You need to name the title for a user's custom grid, with artists and categories they select. The name should be focused on the shared vibe of the artists; e.g. for Green Day/Linkin Park/My Chemical Romance, a clever version of Millenial Childhood Alt Rock would work. The name should be unique to the special vibe shared by the selected artists, always with as much specificity as possible for those three artists. Your suggestion should fit each of the three artists always. You can use vibes, genre, identity, time period, and more. Avoid cringey titles that feel uncool at all costs. You can either give it a summary title, or a funny prompt that describes the artists - a title of Artists Your Parents Would Hate or a title of Hyper-Pop Havoc would work if the artists were 100 gecs, Dorian Electra, and ElyOtto. Do not suggest titles that have a subtitle embedded with a colon, semicolon, hyphen, or other delimiter in any output. Reply with only the title: no quotes, no explanation, under 40 characters. The title you are generating now is for the artists: ${artistsJoined}`;
+}
+
+function cleanTitle(text) {
+    let title = String(text || '').split('\n').map(line => line.trim()).find(Boolean) || '';
+    title = title.replace(/^(title|grid name)\s*:\s*/i, '');
+    title = title.replace(/^["'“”‘’*_`]+|["'“”‘’*_`]+$/g, '').trim();
+    title = title.replace(/[.]+$/, '').trim();
+    return title.slice(0, 60);
+}
+
+function fallbackTitle(artistsJoined) {
+    const names = String(artistsJoined || '').split(',').map(name => name.trim()).filter(Boolean);
+    if (names.length >= 3) return `${names[0]}, ${names[1]} & ${names[2]}`;
+    if (names.length === 2) return `${names[0]} & ${names[1]}`;
+    return names[0] || 'Custom MusicGrid';
+}
+
+async function generateGridTitle(artistsJoined) {
+    if (!OPENAI_SECRET) {
+        console.error('OPENAI_API_KEY is not set, using a fallback title');
+        return null;
+    }
+    const models = workingTitleModel
+        ? [workingTitleModel, ...TITLE_MODELS.filter(model => model !== workingTitleModel)]
+        : TITLE_MODELS;
+    for (const model of models) {
+        try {
+            const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+                model,
+                messages: [{ role: 'user', content: titlePrompt(artistsJoined) }]
+            }, {
+                headers: { 'Authorization': `Bearer ${OPENAI_SECRET}`, 'Content-Type': 'application/json' },
+                timeout: 45000
+            });
+            const title = cleanTitle(response.data.choices[0].message.content);
+            if (!title) continue;
+            const check = await moderateTexts([title]);
+            if (check[0] && check[0].flagged) {
+                console.error(`Title "${title}" was flagged by moderation, using a fallback`);
+                return null;
+            }
+            workingTitleModel = model;
+            return title;
+        } catch (error) {
+            const status = error.response ? error.response.status : 'no response';
+            const detail = error.response ? JSON.stringify(error.response.data).slice(0, 300) : error.message;
+            console.error(`Title model ${model} failed (${status}): ${detail}`);
+            // A bad key or an empty balance fails the same way for every model.
+            if (status === 401 || (status === 429 && detail.includes('insufficient_quota'))) break;
+        }
+    }
+    return null;
+}
+
+// ===================================================================
+// Name screening for leaderboards
+// 1) clean the text, 2) check a word list after undoing look-alike
+// swaps (0->o, 1->i, $->s...), 3) ask OpenAI's free moderation model
+// with stricter-than-default thresholds, since names are so short.
+// Flagged names are swapped for a friendly random one; the original is
+// kept in original_name so you can review it.
+// ===================================================================
+const MODERATION_MODEL = process.env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest';
+const NAME_MAX_LENGTH = 24;
+
+// Stored base64-encoded so the repo doesn't display slurs in plain text.
+// "anywhere" terms are blocked inside any name; "token" terms only as a
+// whole word, because they also occur inside innocent words.
+const decodeTerms = encoded => Buffer.from(encoded, 'base64').toString('utf8').split(',');
+const BLOCK_ANYWHERE = decodeTerms('bmlnZyxuaWdnYSxmYWdnb3QsZmFnb3QsZmFnZyxraWtlLGNoaW5rcyx3ZXRiYWNrLHRyYW5ueSx0cmFubmllLHJhZ2hlYWQsdG93ZWxoZWFkLHBvcmNobW9ua2V5LGp1bmdsZWJ1bm55LHNhbmRuaWdnZXIscmV0YXJkLGN1bnQsd2hvcmUsaGl0bGVyLG5hemksa2lsbHlvdXJzZWxm');
+const BLOCK_TOKENS = decodeTerms('ZmFnLGZhZ3MsY2hpbmssc3BpYyxzcGljayxjb29uLGNvb25zLGdvb2ssemlwcGVyaGVhZCxkeWtlLGtrayxjdW0sc2x1dCxyYXBlLHJhcGlzdCxoZWlsLGt5cw==');
+const LOOKALIKES = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '+': 't', '8': 'b', '9': 'g' };
+
+function cleanName(raw) {
+    return String(raw || '')
+        .normalize('NFKC')
+        .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, NAME_MAX_LENGTH);
+}
+
+function wordListHit(name) {
+    const folded = name.normalize('NFKD').replace(/[\u0300-\u036F]/g, '').toLowerCase()
+        .split('').map(ch => LOOKALIKES[ch] || ch).join('');
+    const letters = folded.replace(/[^a-z]/g, '');
+    const squeezed = letters.replace(/(.)\1+/g, '$1');
+    const tokens = folded.split(/[^a-z]+/).filter(Boolean);
+    const anywhere = BLOCK_ANYWHERE.find(term => letters.includes(term) || (!/(.)\1/.test(term) && squeezed.includes(term)));
+    if (anywhere) return 'word list';
+    if (tokens.some(token => BLOCK_TOKENS.includes(token) || BLOCK_TOKENS.includes(token.replace(/(.)\1+/g, '$1')))) return 'word list';
+    return null;
+}
+
+const MODERATION_THRESHOLDS = {
+    'hate': 0.15, 'hate/threatening': 0.1, 'harassment': 0.35, 'harassment/threatening': 0.2,
+    'sexual': 0.5, 'sexual/minors': 0.05, 'violence/graphic': 0.5, 'self-harm': 0.3, 'self-harm/instructions': 0.2, 'self-harm/intent': 0.2
+};
+
+// Returns one { flagged, reason } per input. If OpenAI can't be reached,
+// it returns unflagged results so scores still go through (the word list
+// still applies).
+async function moderateTexts(texts) {
+    if (!OPENAI_SECRET || !texts.length) return texts.map(() => ({ flagged: false, reason: null }));
+    try {
+        const response = await axios.post('https://api.openai.com/v1/moderations', {
+            model: MODERATION_MODEL,
+            input: texts
+        }, {
+            headers: { 'Authorization': `Bearer ${OPENAI_SECRET}`, 'Content-Type': 'application/json' },
+            timeout: 8000
+        });
+        return response.data.results.map(result => {
+            const scores = result.category_scores || {};
+            const over = Object.keys(MODERATION_THRESHOLDS).find(category => (scores[category] || 0) > MODERATION_THRESHOLDS[category]);
+            if (result.flagged || over) {
+                const categories = Object.keys(result.categories || {}).filter(category => result.categories[category]);
+                return { flagged: true, reason: 'moderation: ' + (categories[0] || over) };
+            }
+            return { flagged: false, reason: null };
+        });
+    } catch (error) {
+        console.error('Moderation check failed, allowing name: ', error.response ? error.response.status : error.message);
+        return texts.map(() => ({ flagged: false, reason: null }));
+    }
+}
+
+const NAME_ADJECTIVES = ['Anonymous', 'Mystery', 'Secret', 'Incognito', 'Unnamed', 'Undercover', 'Masked', 'Quiet'];
+const NAME_NOUNS = ['Bassist', 'Drummer', 'Roadie', 'Tambourine', 'Kazoo', 'Harmonica', 'Ukulele', 'Theremin', 'Cowbell', 'Keytar', 'Triangle', 'Oboe'];
+
+function friendlyName(seed) {
+    let hash = 0;
+    for (const ch of String(seed)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return `${NAME_ADJECTIVES[hash % NAME_ADJECTIVES.length]} ${NAME_NOUNS[Math.floor(hash / NAME_ADJECTIVES.length) % NAME_NOUNS.length]}`;
+}
+
+async function screenName(rawName, seed) {
+    const name = cleanName(rawName);
+    if (!name) return { name: '', renamed: false, reason: null, original: null };
+    let reason = wordListHit(name);
+    if (!reason) reason = (await moderateTexts([name]))[0].reason;
+    if (!reason) return { name, renamed: false, reason: null, original: null };
+    return { name: friendlyName(seed || name), renamed: true, reason, original: name };
+}
+
+// ===================================================================
+// Leaderboards
+// New columns are added automatically at startup. Until that has run
+// (or if the database refuses), everything falls back to the original
+// name-only behavior.
+// ===================================================================
+const MAX_GRID_SCORE = 100; // 1 point for showing up + 9 squares x 11
+let leaderboardSchemaReady = false;
+
+async function ensureLeaderboardSchema() {
+    try {
+        await pool.query(`ALTER TABLE leaderboard_playerscores
+            ADD COLUMN IF NOT EXISTS player_id TEXT,
+            ADD COLUMN IF NOT EXISTS board_type TEXT,
+            ADD COLUMN IF NOT EXISTS original_name TEXT,
+            ADD COLUMN IF NOT EXISTS moderation_reason TEXT,
+            ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ DEFAULT now()`);
+        // Label older scores: daily if the id matches a daily grid, else custom.
+        await pool.query(`UPDATE leaderboard_playerscores l
+            SET board_type = CASE WHEN EXISTS (SELECT 1 FROM musicgrid_templates t WHERE t.grid_id::text = l.owning_grid_id::text)
+                THEN 'daily' ELSE 'custom' END
+            WHERE board_type IS NULL`);
+        await pool.query('CREATE INDEX IF NOT EXISTS leaderboard_owning_grid_idx ON leaderboard_playerscores (owning_grid_id)');
+        leaderboardSchemaReady = true;
+        console.log('Leaderboard schema ready');
+    } catch (error) {
+        console.error('Could not update the leaderboard table, using the original columns: ', error.message);
+    }
+}
+ensureLeaderboardSchema();
+
+function validPlayerId(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(value) ? value : null;
+}
+
+// Normalized view of the scores table that works before and after the
+// new columns exist.
+function scoresCte() {
+    if (leaderboardSchemaReady) {
+        return `scores AS (SELECT player_id, player_name, player_score::numeric AS score, owning_grid_id::text AS gid, board_type, submitted_at
+            FROM leaderboard_playerscores)`;
+    }
+    return `scores AS (SELECT NULL::text AS player_id, player_name, player_score::numeric AS score, owning_grid_id::text AS gid,
+            CASE WHEN owning_grid_id::text IN (SELECT grid_id::text FROM musicgrid_templates) THEN 'daily' ELSE 'custom' END AS board_type,
+            NULL::timestamptz AS submitted_at
+            FROM leaderboard_playerscores)`;
+}
+
+const PLAYER_KEY = `COALESCE(player_id, 'name:' || lower(trim(player_name)))`;
+
+async function gridBoard(lbId, board, playerId, limit) {
+    const { rows } = await pool.query(`WITH ${scoresCte()},
+        entries AS (
+            SELECT ${PLAYER_KEY} AS pkey, player_name, score, submitted_at FROM scores
+            WHERE gid = $1::text AND board_type = $2
+        ), best AS (
+            SELECT DISTINCT ON (pkey) pkey, player_name, score FROM entries
+            ORDER BY pkey, score DESC, submitted_at DESC NULLS LAST
+        ), ranked AS (
+            SELECT pkey, player_name, score,
+                RANK() OVER (ORDER BY score DESC) AS rank,
+                ROW_NUMBER() OVER (ORDER BY score DESC, player_name) AS rn,
+                COUNT(*) OVER () AS players
+            FROM best
+        )
+        SELECT rank, player_name, score, pkey = $3 AS me, players FROM ranked
+        WHERE rn <= $4 OR pkey = $3 ORDER BY rn`, [String(lbId), board, playerId, limit]);
+    return {
+        players: rows.length ? Number(rows[0].players) : 0,
+        entries: rows.map(row => ({ rank: Number(row.rank), player_name: String(row.player_name).trim(), player_score: Number(row.score), me: row.me === true }))
+    };
+}
+
+// All-time: each player's best score on each daily grid, added up.
+async function allTimeBoard(playerId, limit) {
+    const { rows } = await pool.query(`WITH ${scoresCte()},
+        daily AS (
+            SELECT ${PLAYER_KEY} AS pkey, player_name, gid, score, submitted_at FROM scores WHERE board_type = 'daily'
+        ), per_grid AS (
+            SELECT pkey, gid, MAX(score) AS best FROM daily GROUP BY pkey, gid
+        ), names AS (
+            SELECT DISTINCT ON (pkey) pkey, player_name FROM daily
+            ORDER BY pkey, submitted_at DESC NULLS LAST, player_name
+        ), totals AS (
+            SELECT p.pkey, n.player_name, SUM(p.best) AS total, COUNT(*) AS grids
+            FROM per_grid p JOIN names n ON n.pkey = p.pkey GROUP BY p.pkey, n.player_name
+        ), ranked AS (
+            SELECT *, RANK() OVER (ORDER BY total DESC) AS rank,
+                ROW_NUMBER() OVER (ORDER BY total DESC, player_name) AS rn,
+                COUNT(*) OVER () AS players
+            FROM totals
+        )
+        SELECT rank, player_name, total, grids, pkey = $1 AS me, players FROM ranked
+        WHERE rn <= $2 OR pkey = $1 ORDER BY rn`, [playerId, limit]);
+    return {
+        players: rows.length ? Number(rows[0].players) : 0,
+        entries: rows.map(row => ({ rank: Number(row.rank), player_name: String(row.player_name).trim(), total: Number(row.total), grids: Number(row.grids), me: row.me === true }))
+    };
+}
+
+async function isDailyGridId(lbId) {
+    const { rows } = await pool.query('SELECT 1 FROM musicgrid_templates WHERE grid_id::text = $1::text LIMIT 1', [String(lbId)]);
+    return rows.length > 0;
+}
+
+// Both boards in one call. Body: { lb_id, board: 'daily' | 'custom', player_id }
+app.post('/leaderboards', async (req, res) => {
+    try {
+        const lbId = req.body.lb_id;
+        const board = req.body.board === 'custom' ? 'custom' : 'daily';
+        const playerId = validPlayerId(req.body.player_id);
+        const limit = Math.min(Number(req.body.limit) || 10, 50);
+        const [grid, allTime] = await Promise.all([
+            lbId === undefined || lbId === null ? { players: 0, entries: [] } : gridBoard(lbId, board, playerId, limit),
+            allTimeBoard(playerId, limit)
+        ]);
+        res.json({ grid, allTime });
+    } catch (err) {
+        console.error('Error loading leaderboards: ', err.message);
+        res.status(500).send('Error loading leaderboards');
+    }
+});
+
+// ===================================================================
+// Daily grid scheduling (admin)
+// ===================================================================
+function validDay(value) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(Date.parse(value)) ? value : null;
+}
+
+app.post('/schedule-grid', requireAdmin, async (req, res) => {
+    try {
+        const gridId = req.body.grid_id;
+        const day = validDay(req.body.reporting_day);
+        if (!day) return res.status(400).json({ error: 'reporting_day must look like 2026-11-03' });
+        const result = await pool.query('UPDATE musicgrid_templates SET reporting_day = $2::date WHERE grid_id = $1', [gridId, day]);
+        res.json({ grid_id: gridId, reporting_day: day, rows: result.rowCount });
+    } catch (err) {
+        console.error('Error scheduling grid: ', err.message);
+        res.status(500).send('Error scheduling grid');
+    }
+});
+
+// Which grid plays on each day: the one with the latest reporting_day on
+// or before that day. Days with no grid of their own repeat the last one.
+app.get('/grid-calendar', async (req, res) => {
+    try {
+        const days = Math.min(Math.max(Number(req.query.days) || 21, 1), 90);
+        const today = (await pool.query(`SELECT to_char(${TODAY_SQL}, 'YYYY-MM-DD') AS today`)).rows[0].today;
+        const { rows } = await pool.query(`SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS day, bool_or(is_live) AS live,
+                STRING_AGG(DISTINCT CASE WHEN field_type = 'Artist' THEN field_value END, ', ') AS artists
+            FROM musicgrid_templates WHERE reporting_day IS NOT NULL GROUP BY grid_id`);
+        const calendar = [];
+        const start = new Date(today + 'T00:00:00Z');
+        for (let i = 0; i < days; i++) {
+            const date = new Date(start.getTime() + i * 86400000).toISOString().slice(0, 10);
+            const candidates = rows.filter(row => row.day <= date)
+                .sort((a, b) => (b.day.localeCompare(a.day)) || ((b.live ? 1 : 0) - (a.live ? 1 : 0)) || (Number(b.grid_id) - Number(a.grid_id)));
+            const pick = candidates[0];
+            calendar.push({
+                date,
+                grid_id: pick ? pick.grid_id : null,
+                artists: pick ? pick.artists : null,
+                scheduled: Boolean(pick && pick.day === date)
+            });
+        }
+        res.json({ today, timezone: GRID_TIMEZONE, calendar });
+    } catch (err) {
+        console.error('Error building grid calendar: ', err.message);
+        res.status(500).send('Error building grid calendar');
+    }
+});
+
+// ===================================================================
+// One-off admin cleanups
+// ===================================================================
+app.post('/admin/retitle-custom-grids', requireAdmin, async (req, res) => {
+    try {
+        const limit = Math.min(Number(req.body.limit) || 20, 50);
+        const { rows } = await pool.query(`SELECT custom_grid_id, STRING_AGG(field_value, ', ' ORDER BY field) AS artists
+            FROM custom_templates WHERE field_type = 'Artist' AND grid_title = ANY($1)
+            GROUP BY custom_grid_id ORDER BY custom_grid_id DESC LIMIT $2`, [BROKEN_TITLES, limit]);
+        const updated = [];
+        for (const row of rows) {
+            const title = await generateGridTitle(row.artists) || fallbackTitle(row.artists);
+            await pool.query('UPDATE custom_templates SET grid_title = $1 WHERE custom_grid_id = $2', [title, row.custom_grid_id]);
+            updated.push({ custom_grid_id: row.custom_grid_id, title });
+        }
+        const remaining = await pool.query('SELECT COUNT(DISTINCT custom_grid_id) AS n FROM custom_templates WHERE grid_title = ANY($1)', [BROKEN_TITLES]);
+        res.json({ updated, remaining: Number(remaining.rows[0].n) });
+    } catch (err) {
+        console.error('Error retitling grids: ', err.message);
+        res.status(500).send('Error retitling grids');
+    }
+});
+
+app.post('/admin/screen-leaderboard', requireAdmin, async (req, res) => {
+    try {
+        if (!leaderboardSchemaReady) return res.status(503).json({ error: 'Leaderboard columns are not ready yet' });
+        const { rows } = await pool.query(`SELECT DISTINCT player_name FROM leaderboard_playerscores
+            WHERE original_name IS NULL AND player_name IS NOT NULL`);
+        const names = rows.map(row => row.player_name);
+        const renamed = [];
+        for (let i = 0; i < names.length; i += 32) {
+            const batch = names.slice(i, i + 32);
+            const ai = await moderateTexts(batch.map(cleanName));
+            for (let j = 0; j < batch.length; j++) {
+                const reason = wordListHit(cleanName(batch[j])) || ai[j].reason;
+                if (!reason) continue;
+                const newName = friendlyName(batch[j]);
+                await pool.query(`UPDATE leaderboard_playerscores SET player_name = $2, original_name = $1, moderation_reason = $3
+                    WHERE player_name = $1 AND original_name IS NULL`, [batch[j], newName, reason]);
+                renamed.push({ from: batch[j], to: newName, reason });
+            }
+        }
+        res.json({ scanned: names.length, renamed });
+    } catch (err) {
+        console.error('Error screening leaderboard: ', err.message);
+        res.status(500).send('Error screening leaderboard');
+    }
+});
+
+app.get('/admin/moderation-log', requireAdmin, async (req, res) => {
+    try {
+        if (!leaderboardSchemaReady) return res.json([]);
+        const { rows } = await pool.query(`SELECT original_name, player_name, moderation_reason, owning_grid_id, submitted_at
+            FROM leaderboard_playerscores WHERE original_name IS NOT NULL ORDER BY submitted_at DESC NULLS LAST LIMIT 100`);
+        res.json(rows);
+    } catch (err) {
+        console.error('Error loading moderation log: ', err.message);
+        res.status(500).send('Error loading moderation log');
+    }
+});
+
 // Endpoint to search song guesses on Spotify
 app.post('/search', async (req, res) => {
     try {
@@ -248,12 +664,33 @@ app.post('/search-encoding-answer', async (req, res) => {
 });
 
 // Endpoint to update leaderboard after game completion
+// Body: { name, score, lb_id, player_id?, board? }. Older clients that only
+// send name/score/lb_id still work.
 app.post('/submit-score', async (req, res) => {
     try {
-        const { name, score, lb_id } = req.body;
-        const query = 'INSERT INTO leaderboard_playerscores(player_name, player_score, owning_grid_id) VALUES ($1,$2,$3)';
-        await pool.query(query, [name, score, lb_id]);
-        res.send({ message: 'Score submitted successfully.' });
+        const lbId = req.body.lb_id;
+        const score = Number(req.body.score);
+        if (lbId === undefined || lbId === null || !Number.isFinite(score) || score < 0 || score > MAX_GRID_SCORE) {
+            return res.status(400).json({ error: 'Invalid score' });
+        }
+        const playerId = validPlayerId(req.body.player_id);
+        const screened = await screenName(req.body.name, playerId);
+        if (!screened.name) {
+            return res.status(400).json({ error: 'Add a name' });
+        }
+        if (screened.renamed) {
+            console.log(`Renamed leaderboard name (${screened.reason})`);
+        }
+        if (leaderboardSchemaReady) {
+            const daily = req.body.board !== 'custom' && await isDailyGridId(lbId);
+            await pool.query(`INSERT INTO leaderboard_playerscores
+                (player_name, player_score, owning_grid_id, player_id, board_type, original_name, moderation_reason)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [screened.name, score, lbId, playerId, daily ? 'daily' : 'custom', screened.original, screened.reason]);
+        } else {
+            await pool.query('INSERT INTO leaderboard_playerscores(player_name, player_score, owning_grid_id) VALUES ($1,$2,$3)', [screened.name, score, lbId]);
+        }
+        res.send({ message: 'Score submitted successfully.', name: screened.name, renamed: screened.renamed });
     } catch (err) {
         console.error(err);
         res.status(500).send('Server error');
@@ -280,10 +717,19 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 //Endpoint to get ID of the current grid we should serve
 app.get('/latest-grid', async (req, res) => {
     try {
-        const query = 'SELECT grid_id FROM musicgrid_templates WHERE reporting_day <= CURRENT_DATE ORDER BY is_live DESC, reporting_day DESC, grid_id DESC LIMIT 1';
+        // The grid with the latest reporting_day on or before today (in
+        // GRID_TIMEZONE) plays. "Set live" breaks ties for the same day.
+        const query = `SELECT grid_id, to_char(MAX(reporting_day), 'YYYY-MM-DD') AS reporting_day
+            FROM musicgrid_templates
+            GROUP BY grid_id
+            HAVING MAX(reporting_day) <= ${TODAY_SQL}
+            ORDER BY MAX(reporting_day) DESC, bool_or(is_live) DESC, grid_id DESC
+            LIMIT 1`;
         const result = await pool.query(query);
-        const latestGridId = result.rows[0].grid_id; 
-        res.json({ latestGridId });
+        if (!result.rows.length) {
+            return res.status(404).json({ error: 'No grid is scheduled yet' });
+        }
+        res.json({ latestGridId: result.rows[0].grid_id, reportingDay: result.rows[0].reporting_day });
     } catch (err) {
         console.error(err);
         res.status(500).send('Error fetching latest grid');
@@ -291,14 +737,14 @@ app.get('/latest-grid', async (req, res) => {
 });
 
 //Endpoint to get ID of the current grid we should serve
-app.post('/set-grid-live', async (req, res) => {
+// "Set live" now means "play this grid today": it takes today's date, and
+// grids scheduled for later days still take over on those days.
+app.post('/set-grid-live', requireAdmin, async (req, res) => {
     try {
         const { grid_id } = req.body;
-        const setOffQuery = 'UPDATE musicgrid_templates SET is_live = FALSE WHERE grid_id <> $1';
-        const setLiveQuery = 'UPDATE musicgrid_templates SET is_live = TRUE WHERE grid_id = $1';
-        const { rows } = await pool.query(setOffQuery, [grid_id]);
-        const { rows2 } = await pool.query(setLiveQuery, [grid_id]);
-        res.json( rows2);
+        await pool.query('UPDATE musicgrid_templates SET is_live = (grid_id = $1)', [grid_id]);
+        await pool.query(`UPDATE musicgrid_templates SET reporting_day = ${TODAY_SQL} WHERE grid_id = $1`, [grid_id]);
+        res.json({ grid_id });
     } catch (err) {
         console.error(err);
         res.status(500).send('Error setting grid live');
@@ -377,7 +823,7 @@ app.post('/check-custom-answer', async (req, res) => {
 
 
 //Endpoint to update encoded answers table
-app.post('/update-encoded-answers', async (req, res) => {
+app.post('/update-encoded-answers', requireAdmin, async (req, res) => {
     try {
         const { encodedAnswers } = req.body;
         const client = await pool.connect();
@@ -1004,48 +1450,11 @@ app.post('/create-custom-table', async (req, res) => {
 });
 
 app.post('/fetch-ai-gridname', async (req, res) => {
-    try {
-        const artistsJoined = req.body.artists;
-        console.log("Generating AI title from ",artistsJoined);
-        const aiBody = {
-           model: "gpt-4-turbo-preview",
-           messages: [
-              {
-                 role: "user",
-                 content: `Your job is to create a clever, witty name for a custom trivia grid a user just created in my game, MusicGrid. The larger game is to guess songs that match categories and artists. There's 3 columns, each with one artist, and three columns, each with one category; users guess a song that matches the column's artist and the row's category. You need to name the title for a user's custom grid, with artists and categories they select. The name should be focused on the shared vibe of the artists; e.g. for Green Day/Linkin Park/My Chemical Romance, a clever version of Millenial Childhood Alt Rock would work. The name should be unique to the special vibe shared by the selected artists, always with as much specificity as possible for those three artists. Your suggestion should fit each of the three artists always. You can use vibes, genre, identity, time period, and more. Avoid cringey titles that feel uncool at all costs. You can either give it a summary title, or a funny prompt that describes the artists - a title of Artists Your Parents Would Hate or a title of Hyper-Pop Havoc would work if the artists were 100 gecs, Dorian Electra, and ElyOtto. Do not suggest titles that have a subtitle embedded with a colon, semicolon, hyphen, or other delimiter in any output. The title you are generating now is for the artists:  ${artistsJoined}`
-              }
-           ],
-           temperature: 0.6
-        };
-        console.log("Body for request to OpenAI:");
-        console.log(aiBody);       
-        const aiHeaders = {
-           'Authorization': `Bearer ${OPENAI_SECRET}`,
-           'Content-Type': 'application/json'
-         };
-        console.log("Headers for request to OpenAI:");
-        console.log(aiHeaders);
-        console.log("Submitting request");
-        const response = await axios.post(
-            'https://api.openai.com/v1/chat/completions',aiBody,
-            {
-                headers: aiHeaders
-            }
-        );
-       
-        console.log("Response received:");
-        console.log(response);
-        console.log("Parsed relevant response data is:");
-        console.log(response.data.choices[0]);
-        console.log("More specifically: ");
-        console.log(response.data.choices[0].message.content.trim());
-        res.json(response.data.choices[0]);
-    } catch (error) {
-        console.log("Error hit! ", error);
-        console.error(`Error generating music grid name: ${error.message}`);
-        let fallback = { message: { content: "AI Failure Fallback Title" } }
-        res.json(fallback); // Default name
-    }
+    const artistsJoined = String(req.body.artists || '');
+    console.log("Generating AI title from ", artistsJoined);
+    const title = await generateGridTitle(artistsJoined) || fallbackTitle(artistsJoined);
+    // Same shape as before: the builder reads message.content
+    res.json({ message: { content: title } });
 });
 
 app.post('/fetch-ai-weddingresponse', async (req, res) => {
