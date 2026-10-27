@@ -1212,11 +1212,17 @@ app.get('/fetch-grid-summary', async (req, res) => {
 
 
 //Endpoint to evaluate guesses against the answer list
+// Same loose title match the hint finder uses: ignore case, punctuation,
+// spacing and bracketed or " - " tails, so "Self-Care" accepts "Self Care"
+const SQL_TITLE_KEY = col => `regexp_replace(regexp_replace(regexp_replace(lower(${col}), '\\s*[\\(\\[][^\\)\\]]*[\\)\\]]', '', 'g'), '\\s+-\\s+.*$', ''), '[^a-z0-9]+', '', 'g')`;
+const ANSWER_MATCH_SQL = `(song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1)) > 0
+    OR (${SQL_TITLE_KEY('song_name')} <> '' AND ${SQL_TITLE_KEY('song_name')} = ${SQL_TITLE_KEY('$1')}))`;
+
 app.post('/check-answer', async (req, res) => {
     try {
         const { songGuess, fieldGuessed, gridId } = req.body;
         const songGuessIlike = `%${songGuess}%`
-        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = $3 AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const query = `SELECT normed_score AS guessScore, 0 AS rn FROM musicgrid_answers WHERE grid_id = $3 AND field = $2 AND ${ANSWER_MATCH_SQL} UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1`;
         const { rows } = await pool.query(query, [songGuess, fieldGuessed, gridId, songGuessIlike]);
         console.log( rows ); 
         res.json(rows);
@@ -1232,7 +1238,7 @@ app.post('/check-custom-answer', async (req, res) => {
     try {
         const { songGuess, fieldGuessed, customGridId } = req.body;
         const songGuessIlike = `%${songGuess}%`
-        const query = 'SELECT normed_score AS guessScore, 0 AS rn FROM custom_answers WHERE custom_grid_id = $3 AND field = $2 AND (song_name = $1 OR song_name ILIKE $4 OR position(lower(song_name) in lower($1))>0) UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1';
+        const query = `SELECT normed_score AS guessScore, 0 AS rn FROM custom_answers WHERE custom_grid_id = $3 AND field = $2 AND ${ANSWER_MATCH_SQL} UNION ALL SELECT 0 AS guess_score, 10 as rn ORDER BY 2 ASC, 1 DESC LIMIT 1`;
         const { rows } = await pool.query(query, [songGuess, fieldGuessed, customGridId, songGuessIlike]);
         console.log( rows ); 
         res.json(rows);
@@ -1397,7 +1403,7 @@ const HINT_SOURCES = {
 
 // A clip of a song that fits the square, most popular answers first.
 // fresh=true skips saved URLs (the player's browser couldn't play one).
-async function hintClip(kind, gridId, fieldKey, fresh) {
+async function hintClip(kind, gridId, fieldKey, fresh, report) {
     const src = HINT_SOURCES[kind];
     const artistField = String(fieldKey || '').split(' ')[1];
     if (gridId === undefined || gridId === null || !artistField) return null;
@@ -1412,8 +1418,9 @@ async function hintClip(kind, gridId, fieldKey, fresh) {
     const artist = (await pool.query(`SELECT field_value FROM ${src.templates}
         WHERE ${src.templateId}::text = $1::text AND field_type = 'Artist' AND field = $2 LIMIT 1`, [String(gridId), artistField])).rows[0];
     if (!artist) return null;
-    for (const row of rows.slice(0, 4)) {
+    for (const row of rows) {
         const clip = await findSongClip(row.song_name, artist.field_value, fresh ? (row.preview_url || 'none') : null);
+        if (report) report.push({ song: row.song_name, found: Boolean(clip), source: clip ? clip.source : null });
         if (!clip) continue;
         if (clip.source === 'itunes') {
             await pool.query(`UPDATE ${src.answers} SET preview_url = $1
@@ -1440,6 +1447,86 @@ function hintHandler(kind, idKey) {
 
 app.post('/get-cheat-preview-url', hintHandler('daily', 'gridId'));
 app.post('/get-custom-cheat-preview-url', hintHandler('custom', 'customGridId'));
+
+// ===================================================================
+// Admin: see a grid's answers and clips, and remove wrong answers
+// ===================================================================
+async function gridLabels(src, gridId) {
+    const { rows } = await pool.query(`SELECT field_type, field, field_value FROM ${src.templates}
+        WHERE ${src.templateId}::text = $1::text AND field_type IN ('Artist', 'Category')`, [String(gridId)]);
+    const names = {};
+    rows.forEach(row => { names[row.field] = row.field_value; });
+    return names;
+}
+
+// Body: { kind: 'daily' | 'custom', grid_id }. Finds (and saves) a clip for
+// every square, so it also warms up hints before players get there.
+app.post('/admin/grid-answers', requireAdmin, async (req, res) => {
+    try {
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const src = HINT_SOURCES[kind];
+        const gridId = String(req.body.grid_id || '').trim();
+        if (!/^\d{1,12}$/.test(gridId)) return res.status(400).json({ error: 'grid_id must be a number' });
+        const names = await gridLabels(src, gridId);
+        const { rows } = await pool.query(`SELECT field, song_name, normed_score FROM ${src.answers}
+            WHERE ${src.answerId}::text = $1::text ORDER BY field, normed_score ASC, song_name`, [gridId]);
+        const fields = [...new Set(rows.map(row => row.field))].sort();
+        const squares = [];
+        for (const field of fields) {
+            const [category, artist] = field.split(' ');
+            const tried = [];
+            const clip = await hintClip(kind, gridId, field, false, tried).catch(() => null);
+            squares.push({
+                field,
+                category: names[category] || category,
+                artist: names[artist] || artist,
+                answers: rows.filter(row => row.field === field).map(row => ({ song: row.song_name, points: Number(row.normed_score) })),
+                clip: clip ? { url: clip.url, source: clip.source } : null,
+                tried
+            });
+        }
+        res.json({ kind, grid_id: gridId, squares });
+    } catch (err) {
+        console.error('Error loading grid answers: ', err.message);
+        res.status(500).json({ error: 'Error loading grid answers' });
+    }
+});
+
+// Body: { kind, grid_id, field, song }. For a daily grid this also removes
+// the song from its reruns and original (same puzzle), and from the raw
+// answer list so re-scoring doesn't bring it back.
+app.post('/admin/remove-answer', requireAdmin, async (req, res) => {
+    try {
+        const kind = req.body.kind === 'custom' ? 'custom' : 'daily';
+        const src = HINT_SOURCES[kind];
+        const gridId = String(req.body.grid_id || '').trim();
+        const field = String(req.body.field || '');
+        const song = String(req.body.song || '');
+        if (!/^\d{1,12}$/.test(gridId) || !/^C\d+ A\d+$/.test(field) || !song) {
+            return res.status(400).json({ error: 'Send grid_id, field (like "C2 A1") and song' });
+        }
+        let ids = [gridId];
+        if (kind === 'daily' && rotationSchemaReady) {
+            const fam = await pool.query(`WITH me AS (SELECT COALESCE(MAX(rerun_of), grid_id) AS fam FROM musicgrid_templates WHERE grid_id::text = $1 GROUP BY grid_id)
+                SELECT DISTINCT t.grid_id::text AS id FROM musicgrid_templates t, me WHERE t.grid_id = me.fam OR t.rerun_of = me.fam`, [gridId]);
+            if (fam.rows.length) ids = fam.rows.map(row => row.id);
+        }
+        const removed = await pool.query(`DELETE FROM ${src.answers} WHERE ${src.answerId}::text = ANY($1) AND field = $2 AND song_name = $3`, [ids, field, song]);
+        // Raw answer lists look like: "Song", "Song"
+        const raw = await pool.query(`SELECT ${src.templateId}::text AS id, field_value FROM ${src.templates}
+            WHERE ${src.templateId}::text = ANY($1) AND field_type = 'Answer' AND field = $2`, [ids, field]);
+        for (const row of raw.rows) {
+            const songs = (String(row.field_value).match(/"[^"]*"/g) || []).map(item => item.slice(1, -1));
+            if (!songs.includes(song)) continue;
+            const kept = songs.filter(item => item !== song).map(item => `"${item}"`).join(', ');
+            await pool.query(`UPDATE ${src.templates} SET field_value = $3 WHERE ${src.templateId}::text = $1 AND field_type = 'Answer' AND field = $2`, [row.id, field, kept]);
+        }
+        res.json({ removed: removed.rowCount, grids: ids });
+    } catch (err) {
+        console.error('Error removing answer: ', err.message);
+        res.status(500).json({ error: 'Error removing answer' });
+    }
+});
 
 // Does this artist have song clips anywhere? Daily grids skip artists that
 // don't, and the grid builder can leave them out. Results are kept in the
