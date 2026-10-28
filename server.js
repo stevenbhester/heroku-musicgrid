@@ -3563,3 +3563,189 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
         return res.status(500).json({ error: 'An error occurred while processing your request.' });
     }
 });
+
+// ===================================================================
+// stevenhester.com: public counters and private site stats
+// The personal site sends small batches of events to POST /site/events.
+// Letter clicks and name shuffles also add to two public counters, which
+// anyone can read from GET /site/counters. Everything else (how many
+// people visited, what they clicked, how the quiz went) is only readable
+// with the admin key, from GET /site/stats.
+// A visitor is a random id the site keeps in the browser's localStorage.
+// No cookies, and IP addresses are never stored: the per-IP limits below
+// only live in memory, for a minute at a time.
+// ===================================================================
+const SITE_EVENTS = new Set(['visit', 'letter', 'shuffle', 'unshuffle', 'coin', 'link',
+    'quiz_start', 'quiz_answer', 'quiz_finish', 'quiz_copy', 'quiz_again']);
+const SITE_COUNTERS = { letter: 'letters', shuffle: 'shuffles' };
+// Per IP, per minute. Anything past these is dropped quietly, so a script
+// can't run the public counters up.
+const SITE_LIMITS = { requests: 120, letter: 400, shuffle: 40 };
+const SITE_TZ = GRID_TIMEZONE.replace(/'/g, '');
+let siteSchemaReady = false;
+let siteCounterCache = { at: 0, value: null };
+const siteRates = new Map();
+
+async function ensureSiteSchema() {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS site_counters (
+            name TEXT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 0)`);
+        await pool.query(`INSERT INTO site_counters (name) VALUES ('letters'), ('shuffles') ON CONFLICT DO NOTHING`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS site_events (
+            id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            visitor TEXT NOT NULL, event TEXT NOT NULL, target TEXT,
+            n INTEGER NOT NULL DEFAULT 1, value NUMERIC)`);
+        await pool.query('CREATE INDEX IF NOT EXISTS site_events_at ON site_events (at)');
+        siteSchemaReady = true;
+    } catch (error) {
+        console.error('Could not set up site counters: ', error.message);
+    }
+}
+ensureSiteSchema();
+
+function siteClientIp(req) {
+    // Heroku's router adds the real client address at the end of the list.
+    const forwarded = String(req.get('x-forwarded-for') || '').split(',').map(part => part.trim()).filter(Boolean);
+    return forwarded[forwarded.length - 1] || req.ip || 'unknown';
+}
+
+function siteAllowance(ip) {
+    const now = Date.now();
+    if (siteRates.size > 5000) {
+        for (const [key, entry] of siteRates) if (now - entry.at > 60000) siteRates.delete(key);
+    }
+    let entry = siteRates.get(ip);
+    if (!entry || now - entry.at > 60000) {
+        entry = { at: now, requests: 0, letter: 0, shuffle: 0 };
+        siteRates.set(ip, entry);
+    }
+    return entry;
+}
+
+async function readSiteCounters() {
+    if (siteCounterCache.value && Date.now() - siteCounterCache.at < 5000) return siteCounterCache.value;
+    const { rows } = await pool.query('SELECT name, value FROM site_counters');
+    const value = { letters: 0, shuffles: 0 };
+    for (const row of rows) value[row.name] = Number(row.value);
+    siteCounterCache = { at: Date.now(), value };
+    return value;
+}
+
+app.get('/site/counters', async (req, res) => {
+    if (!siteSchemaReady) return res.status(503).json({ error: 'The site counters are not set up yet' });
+    try {
+        res.set('Cache-Control', 'no-store');
+        return res.json(await readSiteCounters());
+    } catch (error) {
+        console.error('Could not read site counters: ', error.message);
+        return res.status(500).json({ error: 'Could not read the counters' });
+    }
+});
+
+// Body: { visitor, events: [{ e: event, t: target, n: count, v: value }] }.
+// The site sends it as text/plain, which skips the CORS preflight and lets
+// navigator.sendBeacon deliver the last batch as the page closes.
+app.post('/site/events', express.text({ type: '*/*', limit: '16kb' }), async (req, res) => {
+    if (!siteSchemaReady) return res.status(503).json({ error: 'The site counters are not set up yet' });
+    let body = req.body;
+    if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Send the events as JSON' }); }
+    }
+    const visitor = String((body && body.visitor) || '');
+    if (!/^(me-)?[A-Za-z0-9-]{8,64}$/.test(visitor) || !Array.isArray(body.events)) {
+        return res.status(400).json({ error: 'Send a visitor id and a list of events' });
+    }
+    const allowance = siteAllowance(siteClientIp(req));
+    allowance.requests += 1;
+    if (allowance.requests > SITE_LIMITS.requests) return res.status(429).json({ error: 'Too many requests. Try again in a minute.' });
+
+    const rows = [];
+    const bumps = { letters: 0, shuffles: 0 };
+    for (const item of body.events.slice(0, 50)) {
+        if (!item || !SITE_EVENTS.has(item.e)) continue;
+        let n = Math.min(Math.max(Math.floor(Number(item.n) || 1), 1), 100);
+        if (SITE_LIMITS[item.e]) {
+            n = Math.min(n, SITE_LIMITS[item.e] - allowance[item.e]);
+            if (n <= 0) continue;
+            allowance[item.e] += n;
+        }
+        const target = item.t === undefined || item.t === null ? null : String(item.t).slice(0, 160);
+        const number = item.v === undefined || item.v === null || item.v === '' ? NaN : Number(item.v);
+        rows.push({ event: item.e, target, n, value: Number.isFinite(number) ? number : null });
+        if (SITE_COUNTERS[item.e]) bumps[SITE_COUNTERS[item.e]] += n;
+    }
+    try {
+        if (rows.length) {
+            await pool.query(
+                `INSERT INTO site_events (visitor, event, target, n, value)
+                 SELECT $1::text, * FROM unnest($2::text[], $3::text[], $4::int[], $5::numeric[])`,
+                [visitor, rows.map(r => r.event), rows.map(r => r.target), rows.map(r => r.n), rows.map(r => r.value)]);
+        }
+        for (const [name, amount] of Object.entries(bumps)) {
+            if (amount) await pool.query('UPDATE site_counters SET value = value + $2 WHERE name = $1', [name, amount]);
+        }
+        if (bumps.letters || bumps.shuffles) siteCounterCache.at = 0;
+        return res.json(await readSiteCounters());
+    } catch (error) {
+        console.error('Could not save site events: ', error.message);
+        return res.status(500).json({ error: 'Could not save the events' });
+    }
+});
+
+// The unlinked stevenhester.com/stats/ page reads this with the admin key.
+// Browsers that page marks as "this is me" send visitor ids starting with
+// "me-": they still add to the public counters but are left out of here.
+app.get('/site/stats', requireAdmin, async (req, res) => {
+    if (!siteSchemaReady) return res.status(503).json({ error: 'The site counters are not set up yet' });
+    const days = Math.min(Math.max(Math.floor(Number(req.query.days) || 30), 1), 365);
+    const notMe = "visitor NOT LIKE 'me-%'";
+    const inRange = `${notMe} AND at > now() - make_interval(days => $1::int)`;
+    const localDay = `(at AT TIME ZONE '${SITE_TZ}')::date`;
+    try {
+        const [totals, returning, daily, clicks, sources, quiz, questions, counters] = await Promise.all([
+            pool.query(`SELECT
+                count(DISTINCT visitor)::int AS all_time,
+                (count(DISTINCT visitor) FILTER (WHERE at > now() - interval '1 day'))::int AS last_day,
+                (count(DISTINCT visitor) FILTER (WHERE at > now() - interval '7 days'))::int AS last_week,
+                (count(DISTINCT visitor) FILTER (WHERE at > now() - make_interval(days => $1::int)))::int AS in_range,
+                (count(*) FILTER (WHERE event = 'visit' AND at > now() - make_interval(days => $1::int)))::int AS visits_in_range,
+                min(at) AS first_seen
+                FROM site_events WHERE ${notMe}`, [days]),
+            pool.query(`SELECT count(*)::int AS people FROM (
+                SELECT visitor FROM site_events WHERE ${inRange} AND event = 'visit'
+                GROUP BY visitor HAVING count(DISTINCT ${localDay}) > 1) repeat_visitors`, [days]),
+            pool.query(`SELECT to_char(${localDay}, 'YYYY-MM-DD') AS day,
+                count(DISTINCT visitor)::int AS people, (count(*) FILTER (WHERE event = 'visit'))::int AS visits
+                FROM site_events WHERE ${inRange} GROUP BY 1 ORDER BY 1`, [days]),
+            pool.query(`SELECT event, coalesce(target, '') AS target, sum(n)::int AS clicks, count(DISTINCT visitor)::int AS people
+                FROM site_events WHERE ${inRange} AND event NOT IN ('visit', 'quiz_answer')
+                GROUP BY 1, 2 ORDER BY clicks DESC LIMIT 100`, [days]),
+            pool.query(`SELECT coalesce(nullif(target, ''), 'direct') AS source,
+                count(*)::int AS visits, count(DISTINCT visitor)::int AS people
+                FROM site_events WHERE ${inRange} AND event = 'visit' GROUP BY 1 ORDER BY visits DESC LIMIT 25`, [days]),
+            pool.query(`SELECT
+                (count(DISTINCT visitor) FILTER (WHERE event = 'quiz_start'))::int AS people_started,
+                (count(DISTINCT visitor) FILTER (WHERE event = 'quiz_finish'))::int AS people_finished,
+                (count(*) FILTER (WHERE event = 'quiz_finish'))::int AS finishes,
+                round(avg(value) FILTER (WHERE event = 'quiz_finish'), 1)::float AS average_score
+                FROM site_events WHERE ${inRange}`, [days]),
+            pool.query(`SELECT target AS question, count(*)::int AS answers, round(100 * avg(value))::int AS percent_right
+                FROM site_events WHERE ${inRange} AND event = 'quiz_answer' AND target IS NOT NULL
+                GROUP BY 1 ORDER BY substring(target from '^(\\d+)')::int NULLS LAST, 1`, [days]),
+            readSiteCounters(),
+        ]);
+        res.set('Cache-Control', 'no-store');
+        return res.json({
+            days,
+            counters,
+            visitors: { ...totals.rows[0], returning_in_range: returning.rows[0].people },
+            daily: daily.rows,
+            clicks: clicks.rows,
+            sources: sources.rows,
+            quiz: { ...quiz.rows[0], questions: questions.rows },
+        });
+    } catch (error) {
+        console.error('Could not read site stats: ', error.message);
+        return res.status(500).json({ error: 'Could not read the stats' });
+    }
+});
