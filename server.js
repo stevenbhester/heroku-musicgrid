@@ -3575,12 +3575,12 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 // No cookies, and IP addresses are never stored: the per-IP limits below
 // only live in memory, for a minute at a time.
 // ===================================================================
-const SITE_EVENTS = new Set(['visit', 'letter', 'shuffle', 'unshuffle', 'coin', 'link',
+const SITE_EVENTS = new Set(['visit', 'letter', 'shuffle', 'unshuffle', 'unscramble', 'coin', 'link', 'egg', 'egg_hint', 'sql', 'mine',
     'quiz_start', 'quiz_answer', 'quiz_finish', 'quiz_copy', 'quiz_again']);
-const SITE_COUNTERS = { letter: 'letters', shuffle: 'shuffles' };
+const SITE_COUNTERS = { letter: 'letters', shuffle: 'shuffles', mine: 'broken' };
 // Per IP, per minute. Anything past these is dropped quietly, so a script
 // can't run the public counters up.
-const SITE_LIMITS = { requests: 120, letter: 400, shuffle: 40 };
+const SITE_LIMITS = { requests: 120, letter: 400, shuffle: 40, mine: 40 };
 const SITE_TZ = GRID_TIMEZONE.replace(/'/g, '');
 let siteSchemaReady = false;
 let siteCounterCache = { at: 0, value: null };
@@ -3590,7 +3590,7 @@ async function ensureSiteSchema() {
     try {
         await pool.query(`CREATE TABLE IF NOT EXISTS site_counters (
             name TEXT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 0)`);
-        await pool.query(`INSERT INTO site_counters (name) VALUES ('letters'), ('shuffles') ON CONFLICT DO NOTHING`);
+        await pool.query(`INSERT INTO site_counters (name) VALUES ('letters'), ('shuffles'), ('broken') ON CONFLICT DO NOTHING`);
         await pool.query(`CREATE TABLE IF NOT EXISTS site_events (
             id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(),
             visitor TEXT NOT NULL, event TEXT NOT NULL, target TEXT,
@@ -3616,7 +3616,7 @@ function siteAllowance(ip) {
     }
     let entry = siteRates.get(ip);
     if (!entry || now - entry.at > 60000) {
-        entry = { at: now, requests: 0, letter: 0, shuffle: 0 };
+        entry = { at: now, requests: 0, letter: 0, shuffle: 0, mine: 0 };
         siteRates.set(ip, entry);
     }
     return entry;
@@ -3625,7 +3625,7 @@ function siteAllowance(ip) {
 async function readSiteCounters() {
     if (siteCounterCache.value && Date.now() - siteCounterCache.at < 5000) return siteCounterCache.value;
     const { rows } = await pool.query('SELECT name, value FROM site_counters');
-    const value = { letters: 0, shuffles: 0 };
+    const value = { letters: 0, shuffles: 0, broken: 0 };
     for (const row of rows) value[row.name] = Number(row.value);
     siteCounterCache = { at: Date.now(), value };
     return value;
@@ -3660,7 +3660,7 @@ app.post('/site/events', express.text({ type: '*/*', limit: '16kb' }), async (re
     if (allowance.requests > SITE_LIMITS.requests) return res.status(429).json({ error: 'Too many requests. Try again in a minute.' });
 
     const rows = [];
-    const bumps = { letters: 0, shuffles: 0 };
+    const bumps = { letters: 0, shuffles: 0, broken: 0 };
     for (const item of body.events.slice(0, 50)) {
         if (!item || !SITE_EVENTS.has(item.e)) continue;
         let n = Math.min(Math.max(Math.floor(Number(item.n) || 1), 1), 100);
@@ -3684,7 +3684,7 @@ app.post('/site/events', express.text({ type: '*/*', limit: '16kb' }), async (re
         for (const [name, amount] of Object.entries(bumps)) {
             if (amount) await pool.query('UPDATE site_counters SET value = value + $2 WHERE name = $1', [name, amount]);
         }
-        if (bumps.letters || bumps.shuffles) siteCounterCache.at = 0;
+        if (bumps.letters || bumps.shuffles || bumps.broken) siteCounterCache.at = 0;
         return res.json(await readSiteCounters());
     } catch (error) {
         console.error('Could not save site events: ', error.message);
