@@ -3576,7 +3576,7 @@ app.post('/fetch-ai-weddingresponse', async (req, res) => {
 // only live in memory, for a minute at a time.
 // ===================================================================
 const SITE_EVENTS = new Set(['visit', 'letter', 'shuffle', 'unshuffle', 'unscramble', 'coin', 'link', 'egg', 'egg_hint', 'sql', 'mine',
-    'quiz_start', 'quiz_answer', 'quiz_finish', 'quiz_copy', 'quiz_again']);
+    'quiz_start', 'quiz_answer', 'quiz_finish', 'quiz_copy', 'quiz_again', 'critter']);
 const SITE_COUNTERS = { letter: 'letters', shuffle: 'shuffles', mine: 'broken' };
 // Per IP, per minute. Anything past these is dropped quietly, so a script
 // can't run the public counters up.
