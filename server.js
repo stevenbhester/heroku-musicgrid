@@ -3692,6 +3692,73 @@ app.post('/site/events', express.text({ type: '*/*', limit: '16kb' }), async (re
     }
 });
 
+// ===================================================================
+// Beta sign-ups (stevenhester.com projects, e.g. Frontiers Celestia)
+// A project page posts { project, name, email, platform, note, website }
+// to POST /site/beta as text/plain (no CORS preflight). "website" is a
+// field people never see: anything in it means a bot, and gets a quiet
+// "thanks" with nothing saved. One row per project and email; signing up
+// again updates the row. Read back with the admin key in /site/stats.
+// ===================================================================
+const BETA_PROJECTS = new Set(['frontiers-celestia']);
+const BETA_PER_MINUTE = 5;
+let betaSchemaReady = false;
+const betaRates = new Map();
+
+async function ensureBetaSchema() {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS beta_signups (
+            id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            project TEXT NOT NULL, name TEXT, email TEXT NOT NULL,
+            platform TEXT, note TEXT, signups INTEGER NOT NULL DEFAULT 1)`);
+        await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS beta_signups_email ON beta_signups (project, lower(email))');
+        betaSchemaReady = true;
+    } catch (error) {
+        console.error('Could not set up beta sign-ups: ', error.message);
+    }
+}
+ensureBetaSchema();
+
+app.post('/site/beta', express.text({ type: '*/*', limit: '8kb' }), async (req, res) => {
+    if (!betaSchemaReady) return res.status(503).json({ error: 'Sign-ups are not set up yet. Try again in a minute.' });
+    let body = req.body;
+    if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Send the sign-up as JSON' }); }
+    }
+    body = body || {};
+    const clean = (value, max) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+    const project = clean(body.project, 40);
+    const email = clean(body.email, 200);
+    if (!BETA_PROJECTS.has(project)) return res.status(400).json({ error: 'Unknown project' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email doesn't look right." });
+    if (clean(body.website, 200)) return res.json({ ok: true });
+
+    const ip = siteClientIp(req);
+    const now = Date.now();
+    if (betaRates.size > 2000) {
+        for (const [key, entry] of betaRates) if (now - entry.at > 60000) betaRates.delete(key);
+    }
+    let entry = betaRates.get(ip);
+    if (!entry || now - entry.at > 60000) { entry = { at: now, count: 0 }; betaRates.set(ip, entry); }
+    entry.count += 1;
+    if (entry.count > BETA_PER_MINUTE) return res.status(429).json({ error: 'Too many sign-ups at once. Try again in a minute.' });
+
+    try {
+        await pool.query(
+            `INSERT INTO beta_signups (project, name, email, platform, note) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (project, lower(email)) DO UPDATE SET at = now(),
+                name = coalesce(nullif(EXCLUDED.name, ''), beta_signups.name),
+                platform = coalesce(nullif(EXCLUDED.platform, ''), beta_signups.platform),
+                note = coalesce(nullif(EXCLUDED.note, ''), beta_signups.note),
+                signups = beta_signups.signups + 1`,
+            [project, clean(body.name, 80), email, clean(body.platform, 40), clean(body.note, 500)]);
+        return res.json({ ok: true });
+    } catch (error) {
+        console.error('Could not save a beta sign-up: ', error.message);
+        return res.status(500).json({ error: 'Could not save the sign-up. Try again later.' });
+    }
+});
+
 // The unlinked stevenhester.com/stats/ page reads this with the admin key.
 // Browsers that page marks as "this is me" send visitor ids starting with
 // "me-": they still add to the public counters but are left out of here.
@@ -3734,6 +3801,9 @@ app.get('/site/stats', requireAdmin, async (req, res) => {
                 GROUP BY 1 ORDER BY substring(target from '^(\\d+)')::int NULLS LAST, 1`, [days]),
             readSiteCounters(),
         ]);
+        // Beta sign-ups ignore the date range: they're a list to work from.
+        const beta = betaSchemaReady ? (await pool.query(`SELECT to_char(at AT TIME ZONE '${SITE_TZ}', 'YYYY-MM-DD HH24:MI') AS at,
+            project, name, email, platform, note, signups FROM beta_signups ORDER BY beta_signups.at DESC LIMIT 1000`)).rows : [];
         res.set('Cache-Control', 'no-store');
         return res.json({
             days,
@@ -3743,6 +3813,7 @@ app.get('/site/stats', requireAdmin, async (req, res) => {
             clicks: clicks.rows,
             sources: sources.rows,
             quiz: { ...quiz.rows[0], questions: questions.rows },
+            beta,
         });
     } catch (error) {
         console.error('Could not read site stats: ', error.message);
