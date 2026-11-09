@@ -4,6 +4,9 @@ const axios = require('axios');
 const cors = require('cors');
 const app = express();
 
+// Frontiers Celestia (open games list, bug reports): /fc/lobby, /fc/reports.
+app.use('/fc', require('./frontiers'));
+
 app.use(express.json());
 const corsOptions ={
    origin:'*',
