@@ -25,4 +25,11 @@ module.exports = {
   // The game retries a report it didn't hear back about. The same report
   // inside this window is answered without filing it again.
   dedupeHours: num(process.env.FC_DEDUPE_HOURS, 24),
+
+  // Cloud saves are kept in MusicGrid's own database (a table of their own,
+  // fc_cloud_saves). Without it they're off in production.
+  databaseUrl: (process.env.FC_DATABASE_URL || process.env.DATABASE_URL || '').trim(),
+  // The most save codes kept at once, and backups one address may send an hour.
+  savesMax: num(process.env.FC_SAVES_MAX, 5000),
+  saveUploadsPerIpHour: num(process.env.FC_SAVE_UPLOADS_PER_IP_HOUR, 30),
 };

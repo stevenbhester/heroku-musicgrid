@@ -1,4 +1,4 @@
-// Frontiers Celestia's routes (the open games list and bug reports), mounted at
+// Frontiers Celestia's routes (the open games list, bug reports and cloud saves), mounted at
 // /fc by server.js before its body parser, so a report with a screenshot isn't
 // cut off by the default 100 KB limit. Its own parsers, limits and 404 stay
 // inside /fc.

@@ -3,7 +3,7 @@
 // are never written anywhere.
 //
 //   const limiter = createLimiter();
-//   limiter.limit({ name, max, windowMs })   express middleware, by client IP
+//   limiter.limit({ name, max, windowMs, error })   express middleware, by client IP
 //   limiter.hit(name, key, max, windowMs)    the same count, by hand
 //
 // Trust proxy is on, so req.ip is the real address behind Heroku's router.
@@ -20,12 +20,12 @@ function createLimiter() {
     return { allowed: b.count <= max, retryAfter: Math.max(1, Math.ceil((b.resetAt - now) / 1000)) };
   }
 
-  function limit({ name, max, windowMs }) {
+  function limit({ name, max, windowMs, error = 'Too many reports. Try again later.' }) {
     return (req, res, next) => {
       const r = hit(name, req.ip || 'unknown', max, windowMs);
       if (r.allowed) return next();
       res.setHeader('Retry-After', String(r.retryAfter));
-      res.status(429).json({ error: 'Too many reports. Try again later.' });
+      res.status(429).json({ error });
     };
   }
 
