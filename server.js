@@ -3696,14 +3696,14 @@ app.post('/site/events', express.text({ type: '*/*', limit: '16kb' }), async (re
 });
 
 // ===================================================================
-// Beta sign-ups (stevenhester.com projects, e.g. Frontiers Celestia)
+// Beta sign-ups (stevenhester.com projects: Frontiers Celestia, Last Mile)
 // A project page posts { project, name, email, platform, note, website }
 // to POST /site/beta as text/plain (no CORS preflight). "website" is a
 // field people never see: anything in it means a bot, and gets a quiet
 // "thanks" with nothing saved. One row per project and email; signing up
 // again updates the row. Read back with the admin key in /site/stats.
 // ===================================================================
-const BETA_PROJECTS = new Set(['frontiers-celestia']);
+const BETA_PROJECTS = new Set(['frontiers-celestia', 'last-mile']);
 const BETA_PER_MINUTE = 5;
 let betaSchemaReady = false;
 const betaRates = new Map();
