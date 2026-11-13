@@ -3,7 +3,7 @@
 // here but a short list of what was filed recently.
 
 const crypto = require('crypto');
-const { issueTitle, issueBody } = require('./issue');
+const fcIssue = require('./issue');
 
 class DailyCapReached extends Error {}
 
@@ -17,7 +17,10 @@ function reportId(report) {
 }
 
 // `allow` says whether today's cap has room (it's only asked about new reports).
-function createReporter({ github, allow, dedupeMs }) {
+// `format` writes the issue ({ issueTitle, issueBody }; Frontiers Celestia's by
+// default) and `labels(report)` names its labels, if any. (Last Mile's reports
+// use both: lastmile/.)
+function createReporter({ github, allow, dedupeMs, format = fcIssue, labels = null }) {
   const recent = new Map(); // id -> { at, done }
   // GitHub writes go one at a time: two commits at once conflict on the branch,
   // and GitHub asks API clients not to make concurrent writes.
@@ -41,7 +44,7 @@ function createReporter({ github, allow, dedupeMs }) {
     if (report.logs.godot) add('godot_log.txt', 'Full Godot log', report.logs.godot);
     if (report.logs.perf) add('perf_log.txt', 'Performance log', report.logs.perf);
     for (const file of files) await github.putFile(file.path, file.content, `Report ${id}: ${file.name}`);
-    return github.createIssue(issueTitle(report), issueBody(report, { id, files }));
+    return github.createIssue(format.issueTitle(report), format.issueBody(report, { id, files }), labels ? labels(report) : undefined);
   }
 
   async function file(report) {

@@ -4,7 +4,7 @@
 
 const CONFLICT_RETRIES = 2;
 
-function createGitHub({ token, repo, branch, api, timeoutMs = 7_000, retryDelayMs = 400 }) {
+function createGitHub({ token, repo, branch, api, timeoutMs = 7_000, retryDelayMs = 400, agent = 'frontiers-celestia-reports' }) {
   function call(method, path, body) {
     return fetch(`${api}/repos/${repo}${path}`, {
       method,
@@ -12,7 +12,7 @@ function createGitHub({ token, repo, branch, api, timeoutMs = 7_000, retryDelayM
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'frontiers-celestia-reports',
+        'User-Agent': agent,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -45,8 +45,9 @@ function createGitHub({ token, repo, branch, api, timeoutMs = 7_000, retryDelayM
     }
   }
 
-  async function createIssue(title, body) {
-    const res = await call('POST', '/issues', { title, body });
+  // `labels` are the server's own words (never a player's); GitHub makes any that are missing.
+  async function createIssue(title, body, labels) {
+    const res = await call('POST', '/issues', labels && labels.length ? { title, body, labels } : { title, body });
     if (!res.ok) throw new Error(`GitHub said ${res.status} opening an issue`);
     return (await res.json()).number;
   }

@@ -41,3 +41,23 @@ Any static server works, but GitHub Pages resolves extensionless URLs (`/play-cu
 ```
 npx eslint .
 ```
+
+## Last Mile feedback (`/lm`)
+
+Last Mile (the delivery puzzle game) sends bug reports and feedback from inside the game to
+`POST /lm/feedback`. Each one is filed as an issue in a private GitHub repo
+(`stevenbhester/last-mile-feedback` by default), with its screenshot and game log committed under
+`reports/<date>_<id>/` and linked from the issue. It reuses Frontiers Celestia's report pipeline
+(`frontiers/github.js`, `reports.js`, `ratelimit.js`, `text.js`): rate limits per address and per day,
+de-duplication of retries, and every bit of player text fenced in code blocks. Last Mile's own fields
+and issue format are in `lastmile/`.
+
+Settings (Heroku config vars):
+
+| Var | |
+| --- | --- |
+| `LM_GITHUB_TOKEN` | A fine-grained token for the feedback repo only: Contents read/write, Issues read/write. Without it, `/lm/feedback` answers 503. |
+| `LM_GITHUB_REPO` | Default `stevenbhester/last-mile-feedback` |
+| `LM_REPORTS_PER_IP_HOUR`, `LM_REPORTS_PER_IP_DAY`, `LM_REPORTS_PER_DAY`, `LM_DEDUPE_HOURS` | Defaults 10, 30, 300, 24 |
+
+`GET /lm/health` says whether reports are being filed (`{"ok": true, "filing": true}`).
