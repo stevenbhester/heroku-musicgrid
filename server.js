@@ -6,7 +6,7 @@ const app = express();
 
 // Frontiers Celestia (open games list, bug reports, cloud saves): /fc/lobby, /fc/reports, /fc/saves.
 app.use('/fc', require('./frontiers'));
-// Last Mile (bug reports and feedback from inside the game, filed as GitHub issues): /lm/feedback.
+// Last Mile (bug reports and feedback from inside the game, filed as GitHub issues; testers' level ratings): /lm/feedback, /lm/ratings.
 app.use('/lm', require('./lastmile'));
 
 app.use(express.json());

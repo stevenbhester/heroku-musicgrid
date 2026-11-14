@@ -6,7 +6,10 @@
 //   LM_GITHUB_REPO    default stevenbhester/last-mile-feedback
 //   LM_GITHUB_BRANCH  default main
 //   LM_REPORTS_PER_IP_HOUR / _PER_IP_DAY / _PER_DAY, LM_DEDUPE_HOURS
+//   LM_RATINGS_PER_IP_HOUR   default 600
 // Without a token, POST /feedback answers 503 and nothing is filed.
+// Level ratings (/ratings) use the app's own DATABASE_URL, and reading them
+// back needs the app's ADMIN_KEY.
 
 const { createApp } = require('./app');
 
@@ -24,6 +27,9 @@ const cfg = {
   perIpDay: num(process.env.LM_REPORTS_PER_IP_DAY, 30),
   perDay: num(process.env.LM_REPORTS_PER_DAY, 300),
   dedupeHours: num(process.env.LM_DEDUPE_HOURS, 24),
+  ratingsPerIpHour: num(process.env.LM_RATINGS_PER_IP_HOUR, 600),
+  databaseUrl: (process.env.DATABASE_URL || '').trim(),
+  adminKey: process.env.ADMIN_KEY || '',
 };
 
 if (cfg.isProduction && process.env.LM_GITHUB_API_URL) {

@@ -61,3 +61,16 @@ Settings (Heroku config vars):
 | `LM_REPORTS_PER_IP_HOUR`, `LM_REPORTS_PER_IP_DAY`, `LM_REPORTS_PER_DAY`, `LM_DEDUPE_HOURS` | Defaults 10, 30, 300, 24 |
 
 `GET /lm/health` says whether reports are being filed (`{"ok": true, "filing": true}`).
+
+### Level ratings (`/lm/ratings`)
+
+Testers who turn on "Rate levels" in Last Mile send a rating after each level (difficulty, fun and
+frustration out of 5, a few descriptors, an optional note) with what the game counted while they played
+(wrong moves, undos, hints, restarts, time). `POST /lm/ratings` keeps each one in Postgres, in the table
+`lm_level_ratings` (made on first use; `DATABASE_URL` is the app's own). The game's random `id` makes a
+retry harmless. `device` and `session` are random ids the game made up: nothing says who anyone is, and no
+address is stored.
+
+`GET /lm/ratings?since=<ISO time>&limit=<n>` hands them back, oldest first, to whoever sends the app's
+`ADMIN_KEY` as `x-admin-key`. Last Mile's `tools/ratings.py` uses it. `LM_RATINGS_PER_IP_HOUR` (default
+600) caps how many one address may send.
