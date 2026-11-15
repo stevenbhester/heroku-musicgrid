@@ -1,6 +1,7 @@
 // Last Mile's routes: POST /feedback (bug reports and feedback sent from inside
 // the game, each filed as an issue in a GitHub repo), POST and GET /ratings
-// (testers' level ratings, kept in the database: see ratings.js) and GET /health. Built on
+// (testers' level ratings, kept in the database: see ratings.js), POST /daily and
+// GET /daily/stats (daily puzzle results and today's numbers: see daily.js) and GET /health. Built on
 // Frontiers Celestia's report pipeline (frontiers/): the same GitHub client,
 // filing, de-duplication and rate limits, with Last Mile's own fields and issue.
 
@@ -11,6 +12,7 @@ const { createReporter, DailyCapReached } = require('../frontiers/reports');
 const { validateFeedback } = require('./validate');
 const issue = require('./issue');
 const { createRatings, createMemoryStore, createPgStore, BadRating } = require('./ratings');
+const daily = require('./daily');
 
 // A screenshot of 1 MB is about 1.4 MB as base64, and the log fits in the rest.
 const BODY_LIMIT = '2mb';
@@ -54,7 +56,36 @@ function createApp(cfg) {
     }
   };
 
-  app.get('/health', (req, res) => res.json({ ok: true, filing, ratings: Boolean(ratings) }));
+  // Daily results: the same database, or memory off production.
+  const dailyStore = cfg.dailyStore
+    || (cfg.databaseUrl ? daily.createPgStore({ url: cfg.databaseUrl }) : null)
+    || (cfg.isProduction ? null : daily.createMemoryStore());
+  const days = dailyStore ? daily.createDaily({ store: dailyStore }) : null;
+  const dailyRoute = (job) => async (req, res) => {
+    if (!days) return res.status(503).json({ error: 'Daily results aren\'t being taken right now.' });
+    try {
+      const out = await job(req);
+      res.status(out.status).json(out.body);
+    } catch (err) {
+      if (err instanceof daily.BadResult) return res.status(400).json({ error: err.message });
+      console.error(`[lm daily] ${err.message}`);
+      res.status(502).json({ error: 'Couldn\'t do that just now. Try again later.' });
+    }
+  };
+
+  app.get('/health', (req, res) => res.json({ ok: true, filing, ratings: Boolean(ratings), daily: Boolean(days) }));
+
+  app.post(
+    '/daily',
+    limiter.limit({ name: 'daily-hour', max: cfg.dailyPerIpHour || 120, windowMs: HOUR, error: 'Too many results. Try again later.' }),
+    express.json({ limit: '8kb', strict: true }),
+    dailyRoute((req) => days.add(req.body)),
+  );
+  app.get(
+    '/daily/stats',
+    limiter.limit({ name: 'daily-stats-hour', max: cfg.dailyStatsPerIpHour || 600, windowMs: HOUR, error: 'Too many requests. Try again later.' }),
+    dailyRoute((req) => days.stats(req.query)),
+  );
 
   app.post(
     '/ratings',
