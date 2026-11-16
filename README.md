@@ -72,5 +72,7 @@ retry harmless. `device` and `session` are random ids the game made up: nothing 
 address is stored.
 
 `GET /lm/ratings?since=<ISO time>&limit=<n>` hands them back, oldest first, to whoever sends the app's
-`ADMIN_KEY` as `x-admin-key`. Last Mile's `tools/ratings.py` uses it. `LM_RATINGS_PER_IP_HOUR` (default
+`ADMIN_KEY` as `x-admin-key`. Last Mile's `tools/ratings.py` uses it, and so does the key-gated chart at
+https://www.stevenhester.com/last-mile/stats/ (only stevenhester.com may read them from a browser). Reads are
+capped at 120 an hour per address, so the key can't be guessed. `LM_RATINGS_PER_IP_HOUR` (default
 600) caps how many one address may send.

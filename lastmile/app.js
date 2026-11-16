@@ -11,6 +11,7 @@ const { createLimiter } = require('../frontiers/ratelimit');
 const { createReporter, DailyCapReached } = require('../frontiers/reports');
 const { validateFeedback } = require('./validate');
 const issue = require('./issue');
+const crypto = require('crypto');
 const { createRatings, createMemoryStore, createPgStore, BadRating } = require('./ratings');
 const daily = require('./daily');
 
@@ -93,10 +94,28 @@ function createApp(cfg) {
     express.json({ limit: '32kb', strict: true }),
     ratingsRoute((req) => ratings.add(req.body)),
   );
-  // Reading them back is for Steven only: the same key as MusicGrid's admin page.
-  app.get('/ratings', (req, res, next) => {
+  // Reading them back is for Steven only: the same key as MusicGrid's admin page. Besides tools/ratings.py,
+  // stevenhester.com/last-mile/stats/ reads them from the browser, so that site (and only that site) may
+  // ask; it still has to send the key. Wrong keys are capped per address so the key can't be guessed.
+  const READERS = new Set(['https://www.stevenhester.com', 'https://stevenhester.com', ...(cfg.ratingsReaders || [])]);
+  const readerCors = (req, res, next) => {
+    const origin = req.get('origin');
+    if (origin && READERS.has(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Vary', 'Origin');
+      res.set('Access-Control-Allow-Methods', 'GET');
+      res.set('Access-Control-Allow-Headers', 'x-admin-key');
+      res.set('Access-Control-Max-Age', '600');
+    }
+    next();
+  };
+  app.options('/ratings', readerCors, (req, res) => res.sendStatus(204));
+  const keyTries = limiter.limit({ name: 'ratings-read-hour', max: cfg.ratingsReadsPerIpHour || 120, windowMs: HOUR, error: 'Too many tries. Try again later.' });
+  app.get('/ratings', readerCors, keyTries, (req, res, next) => {
     if (!cfg.adminKey) return res.status(503).json({ error: 'Set ADMIN_KEY in the Heroku config vars to read ratings.' });
-    if (req.get('x-admin-key') !== cfg.adminKey) return res.status(401).json({ error: 'Admin key required.' });
+    const sent = Buffer.from(String(req.get('x-admin-key') || ''));
+    const want = Buffer.from(cfg.adminKey);
+    if (sent.length !== want.length || !crypto.timingSafeEqual(sent, want)) return res.status(401).json({ error: 'Admin key required.' });
     next();
   }, ratingsRoute((req) => ratings.list(req.query)));
 
