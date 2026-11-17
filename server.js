@@ -3825,3 +3825,85 @@ app.get('/site/stats', requireAdmin, async (req, res) => {
         return res.status(500).json({ error: 'Could not read the stats' });
     }
 });
+
+// ===================================================================
+// Demo ratings (stevenhester.com/demo game sketches)
+// The demo page posts { visitor, game, fun, frustration, originality,
+// comment, website } to POST /site/demo-ratings as text/plain (no CORS
+// preflight). Stars are 1 to 5, or left out. "website" is a field people
+// never see: anything in it means a bot. One row per visitor and game;
+// rating again updates the row. The unlinked stevenhester.com/stats/demo/
+// page reads them back with the admin key.
+// ===================================================================
+const DEMO_PER_MINUTE = 20;
+let demoSchemaReady = false;
+const demoRates = new Map();
+
+async function ensureDemoSchema() {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS demo_ratings (
+            id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            visitor TEXT NOT NULL, game TEXT NOT NULL,
+            fun SMALLINT, frustration SMALLINT, originality SMALLINT, comment TEXT)`);
+        await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS demo_ratings_visitor_game ON demo_ratings (visitor, game)');
+        demoSchemaReady = true;
+    } catch (error) {
+        console.error('Could not set up demo ratings: ', error.message);
+    }
+}
+ensureDemoSchema();
+
+app.post('/site/demo-ratings', express.text({ type: '*/*', limit: '8kb' }), async (req, res) => {
+    if (!demoSchemaReady) return res.status(503).json({ error: 'Ratings are not set up yet. Try again in a minute.' });
+    let body = req.body;
+    if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Send the rating as JSON' }); }
+    }
+    body = body || {};
+    const clean = (value, max) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+    const star = value => { const n = Math.floor(Number(value)); return n >= 1 && n <= 5 ? n : null; };
+    const visitor = clean(body.visitor, 70);
+    const game = clean(body.game, 40);
+    if (!/^(me-)?[A-Za-z0-9-]{8,64}$/.test(visitor)) return res.status(400).json({ error: 'Unknown visitor' });
+    if (!/^[a-z0-9-]{2,40}$/.test(game)) return res.status(400).json({ error: 'Unknown game' });
+    if (clean(body.website, 200)) return res.json({ ok: true });
+    const fun = star(body.fun), frustration = star(body.frustration), originality = star(body.originality);
+    const comment = clean(body.comment, 1000);
+    if (fun === null && frustration === null && originality === null && !comment) return res.status(400).json({ error: 'Pick some stars or leave a comment.' });
+
+    const ip = siteClientIp(req);
+    const now = Date.now();
+    if (demoRates.size > 2000) {
+        for (const [key, entry] of demoRates) if (now - entry.at > 60000) demoRates.delete(key);
+    }
+    let entry = demoRates.get(ip);
+    if (!entry || now - entry.at > 60000) { entry = { at: now, count: 0 }; demoRates.set(ip, entry); }
+    entry.count += 1;
+    if (entry.count > DEMO_PER_MINUTE) return res.status(429).json({ error: 'Too many ratings at once. Try again in a minute.' });
+
+    try {
+        await pool.query(
+            `INSERT INTO demo_ratings (visitor, game, fun, frustration, originality, comment) VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (visitor, game) DO UPDATE SET at = now(), fun = EXCLUDED.fun,
+                frustration = EXCLUDED.frustration, originality = EXCLUDED.originality, comment = EXCLUDED.comment`,
+            [visitor, game, fun, frustration, originality, comment || null]);
+        return res.json({ ok: true });
+    } catch (error) {
+        console.error('Could not save a demo rating: ', error.message);
+        return res.status(500).json({ error: 'Could not save the rating. Try again later.' });
+    }
+});
+
+app.get('/site/demo-ratings', requireAdmin, async (req, res) => {
+    if (!demoSchemaReady) return res.status(503).json({ error: 'Ratings are not set up yet' });
+    try {
+        const { rows } = await pool.query(
+            `SELECT at, visitor, game, fun, frustration, originality, coalesce(comment, '') AS comment
+             FROM demo_ratings ORDER BY at DESC LIMIT 5000`);
+        res.set('Cache-Control', 'no-store');
+        return res.json({ ratings: rows });
+    } catch (error) {
+        console.error('Could not read demo ratings: ', error.message);
+        return res.status(500).json({ error: 'Could not read the ratings' });
+    }
+});
