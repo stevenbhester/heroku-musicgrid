@@ -53,7 +53,14 @@ function attach(server, path) {
       switch (msg.t) {
         case 'settings': return lobby.setSettings(m, msg);
         case 'start': return lobby.start(m);
-        case 'word': return lobby.word(m, msg.w);
+        case 'word': return lobby.word(m, msg.w, msg.path);
+        case 'challenge': return lobby.challenge(m, msg.w);
+        case 'castVote': return lobby.castVote(m, msg.id, !!msg.yes);
+        case 'revealCtl': return lobby.revealCtl(m, msg);
+        case 'attitude': return lobby.attitude(m, msg.kind);
+        case 'setCleared': return lobby.setCleared(m, msg.ms);
+        case 'addBot': return lobby.addBot(m, String(msg.level));
+        case 'removeBot': return lobby.removeBot(m, String(msg.id));
         case 'alliance': return lobby.setAlliance(m, msg.id);
         case 'rename': lobby.rename(m, msg.name); return;
         case 'lobby': return lobby.backToLobby(m);
