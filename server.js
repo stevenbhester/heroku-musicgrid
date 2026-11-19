@@ -3769,52 +3769,88 @@ app.post('/site/beta', express.text({ type: '*/*', limit: '8kb' }), async (req, 
 // "me-": they still add to the public counters but are left out of here.
 app.get('/site/stats', requireAdmin, async (req, res) => {
     if (!siteSchemaReady) return res.status(503).json({ error: 'The site counters are not set up yet' });
-    const days = Math.min(Math.max(Math.floor(Number(req.query.days) || 30), 1), 365);
+    // The range is one of: ?since=<ISO time> (the stats page's "since my last visit"),
+    // ?hours=N, or ?days=N (default 30). Capped at a year back.
+    const nowMs = Date.now();
+    const yearMs = 365 * 86400000;
+    let startMs;
+    const sinceMs = req.query.since ? Date.parse(String(req.query.since)) : NaN;
+    if (Number.isFinite(sinceMs)) startMs = sinceMs;
+    else if (req.query.hours) startMs = nowMs - Math.min(Math.max(Number(req.query.hours) || 24, 1), 8760) * 3600000;
+    else startMs = nowMs - Math.min(Math.max(Math.floor(Number(req.query.days) || 30), 1), 365) * 86400000;
+    startMs = Math.min(Math.max(startMs, nowMs - yearMs), nowMs - 60000);
+    const start = new Date(startMs).toISOString();
+    const days = Math.max(1, Math.ceil((nowMs - startMs) / 86400000));
+    // Two days or less is charted by the hour; anything longer, by the day.
+    const bucket = nowMs - startMs <= 2 * 86400000 ? 'hour' : 'day';
     const notMe = "visitor NOT LIKE 'me-%'";
-    const inRange = `${notMe} AND at > now() - make_interval(days => $1::int)`;
+    const inRange = `${notMe} AND at > $1::timestamptz`;
     const localDay = `(at AT TIME ZONE '${SITE_TZ}')::date`;
+    const bucketKey = bucket === 'hour'
+        ? `to_char(date_trunc('hour', at AT TIME ZONE '${SITE_TZ}'), 'YYYY-MM-DD"T"HH24')`
+        : `to_char(${localDay}, 'YYYY-MM-DD')`;
     try {
-        const [totals, returning, daily, clicks, sources, quiz, questions, counters] = await Promise.all([
+        const [totals, returning, daily, clicks, sources, quiz, questions, counters, activity] = await Promise.all([
             pool.query(`SELECT
                 count(DISTINCT visitor)::int AS all_time,
                 (count(DISTINCT visitor) FILTER (WHERE at > now() - interval '1 day'))::int AS last_day,
                 (count(DISTINCT visitor) FILTER (WHERE at > now() - interval '7 days'))::int AS last_week,
-                (count(DISTINCT visitor) FILTER (WHERE at > now() - make_interval(days => $1::int)))::int AS in_range,
-                (count(*) FILTER (WHERE event = 'visit' AND at > now() - make_interval(days => $1::int)))::int AS visits_in_range,
+                (count(DISTINCT visitor) FILTER (WHERE at > $1::timestamptz))::int AS in_range,
+                (count(*) FILTER (WHERE event = 'visit' AND at > $1::timestamptz))::int AS visits_in_range,
                 min(at) AS first_seen
-                FROM site_events WHERE ${notMe}`, [days]),
-            pool.query(`SELECT count(*)::int AS people FROM (
+                FROM site_events WHERE ${notMe}`, [start]),
+            pool.query(`SELECT count(*)::int AS people,
+                (SELECT count(*)::int FROM (SELECT visitor FROM site_events WHERE ${notMe}
+                    GROUP BY visitor HAVING min(at) > $1::timestamptz) first_timers) AS new_people
+                FROM (
                 SELECT visitor FROM site_events WHERE ${inRange} AND event = 'visit'
-                GROUP BY visitor HAVING count(DISTINCT ${localDay}) > 1) repeat_visitors`, [days]),
-            pool.query(`SELECT to_char(${localDay}, 'YYYY-MM-DD') AS day,
+                GROUP BY visitor HAVING count(DISTINCT ${localDay}) > 1) repeat_visitors`, [start]),
+            pool.query(`SELECT ${bucketKey} AS day,
                 count(DISTINCT visitor)::int AS people, (count(*) FILTER (WHERE event = 'visit'))::int AS visits
-                FROM site_events WHERE ${inRange} GROUP BY 1 ORDER BY 1`, [days]),
+                FROM site_events WHERE ${inRange} GROUP BY 1 ORDER BY 1`, [start]),
             pool.query(`SELECT event, coalesce(target, '') AS target, sum(n)::int AS clicks, count(DISTINCT visitor)::int AS people
                 FROM site_events WHERE ${inRange} AND event NOT IN ('visit', 'quiz_answer')
-                GROUP BY 1, 2 ORDER BY clicks DESC LIMIT 100`, [days]),
+                GROUP BY 1, 2 ORDER BY clicks DESC LIMIT 100`, [start]),
             pool.query(`SELECT coalesce(nullif(target, ''), 'direct') AS source,
                 count(*)::int AS visits, count(DISTINCT visitor)::int AS people
-                FROM site_events WHERE ${inRange} AND event = 'visit' GROUP BY 1 ORDER BY visits DESC LIMIT 25`, [days]),
+                FROM site_events WHERE ${inRange} AND event = 'visit' GROUP BY 1 ORDER BY visits DESC LIMIT 25`, [start]),
             pool.query(`SELECT
                 (count(DISTINCT visitor) FILTER (WHERE event = 'quiz_start'))::int AS people_started,
                 (count(DISTINCT visitor) FILTER (WHERE event = 'quiz_finish'))::int AS people_finished,
                 (count(*) FILTER (WHERE event = 'quiz_finish'))::int AS finishes,
                 round(avg(value) FILTER (WHERE event = 'quiz_finish'), 1)::float AS average_score
-                FROM site_events WHERE ${inRange}`, [days]),
+                FROM site_events WHERE ${inRange}`, [start]),
             pool.query(`SELECT target AS question, count(*)::int AS answers, round(100 * avg(value))::int AS percent_right
                 FROM site_events WHERE ${inRange} AND event = 'quiz_answer' AND target IS NOT NULL
-                GROUP BY 1 ORDER BY substring(target from '^(\\d+)')::int NULLS LAST, 1`, [days]),
+                GROUP BY 1 ORDER BY substring(target from '^(\\d+)')::int NULLS LAST, 1`, [start]),
             readSiteCounters(),
+            // What each person did in the range, most recently active first.
+            pool.query(`WITH r AS (SELECT * FROM site_events WHERE ${inRange}),
+                v AS (SELECT visitor, min(at) AS first_at, max(at) AS last_at,
+                    (count(*) FILTER (WHERE event = 'visit'))::int AS visits,
+                    (array_agg(coalesce(nullif(target, ''), 'direct') ORDER BY at) FILTER (WHERE event = 'visit'))[1] AS source
+                    FROM r GROUP BY visitor ORDER BY last_at DESC LIMIT 100),
+                a AS (SELECT r.visitor, r.event, coalesce(r.target, '') AS target, sum(r.n)::int AS n,
+                    max(r.value)::float AS value, min(r.at) AS first_at
+                    FROM r JOIN v USING (visitor) WHERE r.event NOT IN ('visit', 'quiz_answer') GROUP BY 1, 2, 3)
+                SELECT v.visitor, v.first_at, v.last_at, v.visits, v.source,
+                    (SELECT min(at) FROM site_events e WHERE e.visitor = v.visitor) < $1::timestamptz AS returning,
+                    coalesce((SELECT json_agg(json_build_object('e', a.event, 't', a.target, 'n', a.n, 'v', a.value) ORDER BY a.first_at)
+                        FROM a WHERE a.visitor = v.visitor), '[]'::json) AS did
+                FROM v ORDER BY v.last_at DESC`, [start]),
         ]);
         // Beta sign-ups ignore the date range: they're a list to work from.
         const beta = betaSchemaReady ? (await pool.query(`SELECT to_char(at AT TIME ZONE '${SITE_TZ}', 'YYYY-MM-DD HH24:MI') AS at,
-            project, name, email, platform, note, signups FROM beta_signups ORDER BY beta_signups.at DESC LIMIT 1000`)).rows : [];
+            at AS at_iso, project, name, email, platform, note, signups FROM beta_signups ORDER BY beta_signups.at DESC LIMIT 1000`)).rows : [];
         res.set('Cache-Control', 'no-store');
         return res.json({
             days,
+            since: start,
+            bucket,
             counters,
-            visitors: { ...totals.rows[0], returning_in_range: returning.rows[0].people },
+            visitors: { ...totals.rows[0], returning_in_range: returning.rows[0].people, new_in_range: returning.rows[0].new_people },
             daily: daily.rows,
+            activity: activity.rows,
             clicks: clicks.rows,
             sources: sources.rows,
             quiz: { ...quiz.rows[0], questions: questions.rows },
