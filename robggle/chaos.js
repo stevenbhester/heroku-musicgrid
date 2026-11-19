@@ -12,6 +12,9 @@ const TYPES = {
   banana:    { weight: 0.8, warn: 3500, dur: 25000 },
   set:       { weight: 0.6, warn: 5000, dur: 40000 },
 };
+// Nana's BaNanagrams scales with the board: more tiles to pull, more time and a bigger banana.
+const durFor = (type, size) => (type === 'banana' ? (4 + size * size) * 1000 : TYPES[type].dur);
+const bananaFull = size => Math.round(size * size * 1.6);
 const QUIET_START = 15000; // let everyone settle in first
 const QUIET_END = 8000;    // and keep the last seconds clean
 const GAP = 6000;          // breathing room between events
@@ -69,7 +72,7 @@ function plan(timeSec, size, allowed) {
     chosen.push(t);
     pool = pool.filter(x => x !== t);
   }
-  const len = t => TYPES[t].warn + TYPES[t].dur;
+  const len = t => TYPES[t].warn + durFor(t, size);
   // Drop the longest events until they all fit.
   while (chosen.length && chosen.reduce((s, t) => s + len(t), 0) + GAP * (chosen.length - 1) > window) {
     const longest = chosen.reduce((a, b) => (len(b) > len(a) ? b : a));
@@ -89,11 +92,12 @@ function plan(timeSec, size, allowed) {
   let t = QUIET_START + (spare * cuts[0]) / cutSum;
   return chosen.map((type, i) => {
     const spec = TYPES[type];
-    const ev = { id: `${type}${i}`, type, warnAt: Math.round(t), at: Math.round(t + spec.warn), dur: spec.dur, data: {} };
+    const ev = { id: `${type}${i}`, type, warnAt: Math.round(t), at: Math.round(t + spec.warn), dur: durFor(type, size), data: {} };
     if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
     if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
     if (type === 'leak') ev.data = { chance: 0.25 };
-    t = ev.at + spec.dur + GAP + (spare * cuts[i + 1]) / cutSum;
+    if (type === 'banana') ev.data = { full: bananaFull(size) };
+    t = ev.at + ev.dur + GAP + (spare * cuts[i + 1]) / cutSum;
     return ev;
   });
 }
@@ -118,11 +122,12 @@ function forced(types, size) {
   let t = 2000;
   return types.filter(x => TYPES[x]).map((type, i) => {
     const spec = TYPES[type];
-    const ev = { id: `${type}${i}`, type, warnAt: t, at: t + spec.warn, dur: spec.dur, data: {} };
+    const ev = { id: `${type}${i}`, type, warnAt: t, at: t + spec.warn, dur: durFor(type, size), data: {} };
     if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
     if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
     if (type === 'leak') ev.data = { chance: +(process.env.ROBGGLE_LEAK || 0.25) };
-    t = ev.at + spec.dur + 2000;
+    if (type === 'banana') ev.data = { full: bananaFull(size) };
+    t = ev.at + ev.dur + 2000;
     return ev;
   });
 }

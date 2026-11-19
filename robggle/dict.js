@@ -30,4 +30,4 @@ for (const lvl of VALID_LEVELS) {
 const prefixes = new Set();
 for (const w of valid) for (let i = 1; i < w.length; i++) prefixes.add(w.slice(0, i));
 
-module.exports = { valid, common, prefixes };
+module.exports = { valid, common, prefixes, blocked };

@@ -4,7 +4,7 @@ const sec = ms => `${Math.round(ms / 1000)}s`;
 
 // ctx: { players: [...results players], perPlayer: Map(id -> stats), roundMs, words: results words }
 function award(ctx) {
-  const { players, perPlayer, roundMs } = ctx;
+  const { players, perPlayer, roundMs, coop } = ctx;
   const out = {};
   const cands = new Map(players.map(p => [p.id, []]));
   const add = (id, score, b) => { if (cands.has(id)) cands.get(id).push({ score, ...b }); };
@@ -21,13 +21,13 @@ function award(ctx) {
   // ----- results -----
   if (multi && ranked[0] && ranked[0].round > 0) {
     const tied = ranked.filter(p => p.round === ranked[0].round);
-    for (const p of tied) add(p.id, 100, { key: 'champ', icon: 'crown', tone: 'good', title: tied.length > 1 ? 'Co-Champion' : 'Top of the Pile', desc: `Won the round with ${p.round} points` });
+    for (const p of tied) add(p.id, 100, coop ? { key: 'champ', icon: 'crown', tone: 'good', title: 'Team MVP', desc: `Wrote down ${p.round} points for the team` } : { key: 'champ', icon: 'crown', tone: 'good', title: tied.length > 1 ? 'Co-Champion' : 'Top of the Pile', desc: `Won the round with ${p.round} points` });
   }
   if (multi && ranked.length > 2) {
     const last = ranked[ranked.length - 1];
-    if (last.round < ranked[0].round) add(last.id, 55, { key: 'participation', icon: 'ribbon', tone: 'bad', title: 'Participation Trophy', desc: `Came last with ${last.round} point${last.round === 1 ? '' : 's'}. You showed up!` });
+    if (last.round < ranked[0].round) add(last.id, 55, coop ? { key: 'participation', icon: 'ribbon', tone: 'funny', title: 'Moral Support', desc: `Held the pen for ${last.round} point${last.round === 1 ? '' : 's'}. The cheering counted too.` } : { key: 'participation', icon: 'ribbon', tone: 'bad', title: 'Participation Trophy', desc: `Came last with ${last.round} point${last.round === 1 ? '' : 's'}. You showed up!` });
   }
-  if (multi && ranked.length > 1 && ranked[0].round - ranked[1].round <= 2 && ranked[1].round > 0) {
+  if (!coop && multi && ranked.length > 1 && ranked[0].round - ranked[1].round <= 2 && ranked[1].round > 0) {
     add(ranked[1].id, 70, { key: 'sosoclose', icon: 'ruler', tone: 'funny', title: 'So Close It Hurts', desc: `Lost by ${ranked[0].round - ranked[1].round}` });
   }
 

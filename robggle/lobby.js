@@ -20,6 +20,9 @@ const SOLO_MULT = 2;
 const VOTE_MS = 12000;
 const MAX_CHALLENGES = 3;
 const MAX_BOTS = 6;
+const COOP_CAP_MS = 30 * 60000; // Pass the Pen has no clock; this is just a backstop
+const PEN_TIMES = [30, 45, 60, 90];
+const DRY_TIMES = [10, 15, 20, 30];
 
 const lobbies = new Map();
 
@@ -32,7 +35,15 @@ function newCode() {
 }
 
 const clamp = (v, lo, hi, d) => (Number.isFinite(+v) ? Math.min(hi, Math.max(lo, Math.round(+v))) : d);
-const cleanName = s => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 14);
+const { blocked } = require('./dict');
+// Names show up in the public games list, so anything off-color becomes "Player".
+const cleanName = s => {
+  const name = String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 14);
+  const lower = name.toLowerCase();
+  const words = lower.split(/[^a-z]+/).filter(Boolean);
+  if (words.some(w => blocked.has(w)) || blocked.has(lower.replace(/[^a-z]/g, ''))) return 'Player';
+  return name;
+};
 
 class Lobby {
   constructor() {
@@ -41,7 +52,7 @@ class Lobby {
     this.alliances = new Map();
     this.hostId = null;
     this.phase = 'lobby';
-    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES) };
+    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES), mode: 'versus', penTime: 45, dryTime: 15 };
     this.customWords = new Set(); // challenged words the family voted in
     this.revealSpeed = 1;
     this.round = null;
@@ -121,6 +132,11 @@ class Lobby {
     if (host && !host.connected && now - host.leftAt > HOST_HANDOFF_MS) {
       const live = [...this.members.values()].filter(x => x.connected && !x.bot);
       if (live.length) { this.hostId = (live.find(x => x.role === 'screen') || live[0]).id; this.broadcastState(); }
+    }
+    const c = this.round && this.round.coop;
+    if (c && !c.ended && this.phase === 'playing' && c.holder) {
+      const h = this.members.get(c.holder);
+      if (!h || (!h.connected && now - h.leftAt > 3000)) this.nextTurn();
     }
     // Drop players who have been gone a long time while the lobby sits idle.
     if (this.phase === 'lobby') {
@@ -226,6 +242,9 @@ class Lobby {
       handicap: s.handicap == null ? this.settings.handicap : !!s.handicap,
       chaos: s.chaos == null ? this.settings.chaos : !!s.chaos,
       chaosTypes: this.settings.chaosTypes,
+      mode: s.mode === 'coop' || s.mode === 'versus' ? s.mode : this.settings.mode,
+      penTime: PEN_TIMES.includes(+s.penTime) ? +s.penTime : this.settings.penTime,
+      dryTime: DRY_TIMES.includes(+s.dryTime) ? +s.dryTime : this.settings.dryTime,
     };
     if (Array.isArray(s.chaosTypes)) {
       const picked = Object.keys(chaos.TYPES).filter(t => s.chaosTypes.includes(t));
@@ -240,6 +259,8 @@ class Lobby {
     if (!this.playerList().length) return this.send(m, { t: 'error', msg: 'Need at least one player.' });
     this.clearTimers();
     const { size, minLen, time } = this.settings;
+    const coop = this.settings.mode === 'coop';
+    if (coop && !this.playerList().some(p => !p.bot)) return this.send(m, { t: 'error', msg: 'Pass the Pen needs at least one person.' });
     const { tiles, words } = deal(size, minLen);
     const salt = crypto.randomBytes(4).toString('hex');
     const now = Date.now();
@@ -249,7 +270,8 @@ class Lobby {
     this.round = {
       no: this.roundNo, tiles, size, minLen, words, salt,
       startAt: now + COUNTDOWN_MS,
-      endsAt: now + COUNTDOWN_MS + time * 1000,
+      endsAt: now + COUNTDOWN_MS + (coop ? COOP_CAP_MS : time * 1000),
+      mode: coop ? 'coop' : 'versus',
       found: new Map(),     // memberId -> Map(word -> { at, path, bonus, via, from })
       rejected: new Map(),  // memberId -> Map(word -> { path, challenged })
       stats: new Map(),     // memberId -> numbers the badges read
@@ -257,7 +279,8 @@ class Lobby {
       banana: new Map(),    // memberId -> { removed: Set(tile), count }
       bananaSplit: [],
       hashes: [...words.keys()].map(w => fnv(salt + w)),
-      chaos: process.env.ROBGGLE_DEV && this.devForce ? chaos.forced(this.devForce, size) : this.settings.chaos ? chaos.plan(time, size, this.settings.chaosTypes) : [],
+      chaos: process.env.ROBGGLE_DEV && this.devForce ? chaos.forced(this.devForce, size) : this.settings.chaos ? chaos.plan(coop ? 300 : time, size, this.settings.chaosTypes.filter(t => !coop || t !== 'leak')) : [],
+      coop: coop ? { idx: -1, holder: null, turnNo: 0, dryTurns: 0, turns: [], turnWords: 0, turnStart: 0, lastWordAt: 0, timer: null, ended: false } : null,
     };
     this.phase = 'countdown';
     this.lastResults = null;
@@ -268,7 +291,74 @@ class Lobby {
       if (e.type === 'banana') this.later(() => this.bananaEnd(), this.round.startAt + e.at + e.dur - now);
     }
     this.later(() => this.finish(), this.round.endsAt - now + GRACE_MS);
-    this.runBots();
+    if (coop) this.later(() => this.nextTurn(), COUNTDOWN_MS);
+    else this.runBots();
+  }
+
+  // ---------- Pass the Pen (co-op) ----------
+  // Whose turn is next: people only (bots sit this mode out), in join order, skipping anyone offline.
+  nextTurn() {
+    const r = this.round, c = r && r.coop;
+    if (!c || c.ended) return;
+    const now = Date.now();
+    clearTimeout(c.timer);
+    if (c.holder) {
+      c.turns.push({ id: c.holder, words: c.turnWords, ms: now - c.turnStart });
+      c.dryTurns = c.turnWords ? 0 : c.dryTurns + 1;
+      if (c.dryTurns >= 2) return this.coopEnd('dry');
+    }
+    const people = this.playerList().filter(p => !p.bot);
+    if (!people.some(p => p.connected)) return this.coopEnd('empty');
+    let next = null;
+    for (let k = 1; k <= people.length && !next; k++) {
+      const p = people[(c.idx + k) % people.length];
+      if (p.connected) { next = p; c.idx = (c.idx + k) % people.length; }
+    }
+    c.holder = next.id;
+    c.turnNo++;
+    c.turnStart = now;
+    c.lastWordAt = now;
+    c.turnWords = 0;
+    this.coopSchedule();
+    this.broadcast(this.penMsg());
+  }
+
+  coopSchedule() {
+    const c = this.round.coop;
+    clearTimeout(c.timer);
+    const due = Math.min(c.turnStart + this.settings.penTime * 1000, c.lastWordAt + this.settings.dryTime * 1000);
+    c.timer = setTimeout(() => this.nextTurn(), Math.max(0, due - Date.now()));
+    this.timers.push(c.timer);
+  }
+
+  penMsg() {
+    const r = this.round, c = r.coop;
+    return {
+      t: 'pen', holder: c.holder, turnNo: c.turnNo, dryTurns: c.dryTurns,
+      turnEndsAt: c.turnStart + this.settings.penTime * 1000, dryAt: c.lastWordAt + this.settings.dryTime * 1000,
+      found: this.teamWords().length, total: r.words.size,
+    };
+  }
+
+  teamWords() {
+    const out = [];
+    for (const [id, f] of this.round.found) for (const [w, x] of f) out.push({ w, by: id, at: x.at, pts: points(w) + (x.bonus || 0), path: x.path });
+    return out.sort((a, b) => a.at - b.at);
+  }
+
+  passPen(m) {
+    const c = this.round && this.round.coop;
+    if (c && !c.ended && this.phase === 'playing' && m.id === c.holder) this.nextTurn();
+  }
+
+  coopEnd(reason) {
+    const r = this.round, c = r.coop;
+    if (c.ended) return;
+    c.ended = true;
+    clearTimeout(c.timer);
+    r.endsAt = Date.now();
+    this.broadcast({ t: 'coopEnd', reason, turns: c.turns.length });
+    this.later(() => this.finish(), GRACE_MS);
   }
 
   playerList() { return [...this.members.values()].filter(x => x.role === 'player'); }
@@ -301,6 +391,10 @@ class Lobby {
       bananaSplit: r.bananaSplit,
       handicap: this.settings.handicap,
       custom: [...this.customWords].map(w => fnv(r.salt + w)),
+      mode: r.mode,
+      pen: r.coop && r.coop.holder ? this.penMsg() : null,
+      team: r.coop ? this.teamWords().map(x => ({ w: x.w, by: x.by, pts: x.pts })) : null,
+      settings: { penTime: this.settings.penTime, dryTime: this.settings.dryTime },
     };
   }
 
@@ -351,9 +445,12 @@ class Lobby {
     if (banana && bState && path.some(i => bState.removed.has(i))) return reply(false, 'banana');
     if (chaos.active(r.chaos, 'robbert', ms) && w.length !== 3) { this.bump(m.id, 'robbertBad'); return reply(false, 'robbert'); }
     if (w.length < r.minLen) return reply(false, 'short');
+    const c = r.coop;
+    if (c && (c.ended || m.id !== c.holder)) return reply(false, 'notyou');
     let mine = r.found.get(m.id);
     if (!mine) r.found.set(m.id, (mine = new Map()));
     if (mine.has(w)) return reply(false, 'dupe');
+    if (c && [...r.found.values()].some(f => f.has(w))) return reply(false, 'teamdupe');
     if (!valid.has(w) && !this.customWords.has(w)) {
       if (!r.rejected.has(m.id)) r.rejected.set(m.id, new Map());
       if (!r.rejected.get(m.id).has(w)) r.rejected.get(m.id).set(w, { path, at: ms });
@@ -397,6 +494,14 @@ class Lobby {
       }
     }
     reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined });
+    if (c) {
+      c.turnWords++;
+      c.lastWordAt = Date.now();
+      this.broadcast({ t: 'coopWord', w, by: m.id, pts: points(w) + bonus, bonus });
+      if (this.teamWords().length >= r.words.size) { this.coopEnd('all'); return; }
+      this.coopSchedule();
+      this.broadcast(this.penMsg());
+    }
     for (const a of this.allies(m)) this.send(a, { t: 'ally', w, by: m.id, path });
     this.broadcast({ t: 'counts', counts: this.counts(), banana: banana ? this.bananaCounts() : undefined });
     if (bonus) this.broadcast({ t: 'bridge', id: m.id, kind: bonus === 5 ? 'both' : 'one', bonus });
@@ -532,7 +637,7 @@ class Lobby {
     const r = this.round;
     this.phase = 'results';
     this.vote = null;
-    const players = this.playerList();
+    const players = this.playerList().filter(p => !r.coop || !p.bot);
 
     // Which group found each word? An alliance counts as one group; a lone player is their own.
     const groupOf = id => { const m = this.members.get(id); return m && m.alliance ? 'a:' + m.alliance : 'p:' + id; };
@@ -551,7 +656,7 @@ class Lobby {
     for (const [w, list] of finders) {
       list.sort((a, b) => a.at - b.at);
       const groups = new Set(list.map(x => groupOf(x.id)));
-      const solo = groups.size === 1 && players.length > 1;
+      const solo = !r.coop && groups.size === 1 && players.length > 1;
       const base = points(w);
       const pts = solo ? base * SOLO_MULT : base;
       const bonus = {}, via = {};
@@ -583,11 +688,12 @@ class Lobby {
     const out = [];
     for (const m of players) {
       const g = after(m.id);
-      const hcp = this.settings.handicap ? this.handicapIndex(m) : 0;
-      const strokes = this.settings.handicap ? Math.round((hcp / 100) * best) : 0;
+      const useHcp = this.settings.handicap && !r.coop;
+      const hcp = useHcp ? this.handicapIndex(m) : 0;
+      const strokes = useHcp ? Math.round((hcp / 100) * best) : 0;
       const net = g + strokes;
       m.total += net;
-      if (this.settings.handicap && best > 0) {
+      if (useHcp && best > 0) {
         m.hcpHistory.push(((best - g) / best) * 100);
         if (m.hcpHistory.length > 10) m.hcpHistory.shift();
       }
@@ -621,17 +727,19 @@ class Lobby {
       s.bridges = bridgeCount[m.id] || 0;
       perPlayer.set(m.id, s);
     }
-    const badges = award({ players: out, perPlayer, roundMs: r.endsAt - r.startAt, words });
+    const badges = award({ players: out, perPlayer, roundMs: r.endsAt - r.startAt, words, coop: !!r.coop });
 
     this.lastResults = {
       t: 'results', no: r.no, tiles: r.tiles, size: r.size, words, players: out, alliances, missed,
       possible: r.words.size, best: bestWord ? { w: bestWord.w, by: bestWord.finders.filter(id => bestWord.via[id] !== 'leak') } : null,
       soloMult: SOLO_MULT, heat: { all: heatAll, by: heatBy }, badges, handicap: this.settings.handicap,
       chaos: r.chaos.map(e => e.type), bananaSplit: r.bananaSplit,
+      mode: r.mode,
+      coop: r.coop ? { found: words.length, possible: r.words.size, turns: r.coop.turns, passes: r.coop.turns.length, points: out.reduce((sum, p) => sum + p.gross, 0) } : null,
     };
     this.banterLog = new Map();
     this.broadcast(this.lastResults);
-    for (const b of players.filter(p => p.bot)) this.later(() => this.attitude(b, bots.attitude(b.bot)), 7000 + crypto.randomInt(9000));
+    if (!r.coop) for (const b of players.filter(p => p.bot)) this.later(() => this.attitude(b, bots.attitude(b.bot)), 7000 + crypto.randomInt(9000));
     this.broadcastState();
   }
 
@@ -646,7 +754,7 @@ class Lobby {
   // Good/bad winner/loser speech bubbles.
   attitude(m, kind) {
     const R = this.lastResults;
-    if (!R || this.phase !== 'results' || m.role !== 'player') return;
+    if (!R || this.phase !== 'results' || m.role !== 'player' || R.mode === 'coop') return;
     const log = this.banterLog.get(m.id) || { n: 0, last: 0 };
     if (log.n >= 4 || Date.now() - log.last < 2500) return;
     log.n++; log.last = Date.now();
