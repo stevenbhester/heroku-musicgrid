@@ -8,6 +8,9 @@ const app = express();
 app.use('/fc', require('./frontiers'));
 // Last Mile (bug reports and feedback from inside the game, filed as GitHub issues; testers' level ratings): /lm/feedback, /lm/ratings.
 app.use('/lm', require('./lastmile'));
+// Robggle (family word game, source in stevenbhester/robggle): lobby list /rg/api/lobbies, game WebSocket /rg/ws.
+const robggle = require('./robggle');
+app.use('/rg', robggle.router);
 
 app.use(express.json());
 const corsOptions ={
@@ -2537,7 +2540,8 @@ app.post('/admin/complaints/decide', requireAdmin, async (req, res) => {
 app.post('/admin/verify', requireAdmin, (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+robggle.attach(server);
 
 //Endpoint to get ID of the current grid we should serve
 app.get('/latest-grid', async (req, res) => {
