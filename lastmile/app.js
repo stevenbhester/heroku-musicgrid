@@ -14,6 +14,7 @@ const issue = require('./issue');
 const crypto = require('crypto');
 const { createRatings, createMemoryStore, createPgStore, BadRating } = require('./ratings');
 const daily = require('./daily');
+const skill = require('./skill');
 
 // A screenshot of 1 MB is about 1.4 MB as base64, and the log fits in the rest.
 const BODY_LIMIT = '2mb';
@@ -110,14 +111,42 @@ function createApp(cfg) {
     next();
   };
   app.options('/ratings', readerCors, (req, res) => res.sendStatus(204));
+  app.options('/testers', readerCors, (req, res) => res.sendStatus(204));
   const keyTries = limiter.limit({ name: 'ratings-read-hour', max: cfg.ratingsReadsPerIpHour || 120, windowMs: HOUR, error: 'Too many tries. Try again later.' });
-  app.get('/ratings', readerCors, keyTries, (req, res, next) => {
+  const adminOnly = (req, res, next) => {
     if (!cfg.adminKey) return res.status(503).json({ error: 'Set ADMIN_KEY in the Heroku config vars to read ratings.' });
     const sent = Buffer.from(String(req.get('x-admin-key') || ''));
     const want = Buffer.from(cfg.adminKey);
     if (sent.length !== want.length || !crypto.timingSafeEqual(sent, want)) return res.status(401).json({ error: 'Admin key required.' });
     next();
-  }, ratingsRoute((req) => ratings.list(req.query)));
+  };
+  app.get('/ratings', readerCors, keyTries, adminOnly, ratingsRoute((req) => ratings.list(req.query)));
+
+  // What the records say about each tester (lastmile/skill.js): an estimated skill, and where they stand for
+  // skill and grit. Everyone's, for Steven's stats page (the same key); and a phone's own, for the game's
+  // "Show my data", asked for by the random id only that phone has. Worked out from all the records, so it's
+  // kept for a minute between askers.
+  let recordsAt = 0;
+  let records = [];
+  const allRecords = async () => {
+    if (Date.now() - recordsAt > 60_000) {
+      await ratingsStore.ready();
+      records = await ratingsStore.list('', 20000);
+      recordsAt = Date.now();
+    }
+    return records;
+  };
+  app.get('/testers', readerCors, keyTries, adminOnly, ratingsRoute(async () => ({ status: 200, body: { testers: skill.everyone(await allRecords()), bots: skill.BOTS, botJobs: skill.BOT_JOBS } })));
+  app.post(
+    '/me',
+    limiter.limit({ name: 'me-hour', max: cfg.mePerIpHour || 60, windowMs: HOUR, error: 'Too many requests. Try again later.' }),
+    express.json({ limit: '2kb', strict: true }),
+    ratingsRoute(async (req) => {
+      const device = req.body && req.body.device;
+      if (typeof device !== 'string' || !/^[0-9a-f]{32}$/.test(device)) throw new BadRating('device must be 32 hex characters.');
+      return { status: 200, body: skill.mine(await allRecords(), device) };
+    }),
+  );
 
   app.post(
     '/feedback',

@@ -62,6 +62,21 @@ Settings (Heroku config vars):
 
 `GET /lm/health` says whether reports are being filed (`{"ok": true, "filing": true}`).
 
+### Tester estimates (`/lm/testers`, `/lm/me`)
+
+`lastmile/skill.js` works out, from the play records, each tester's estimated skill (out of 100), their grit
+(how likely they are to push on without asking for help), how they do against par, and where they stand. Par
+is each job's usual time, hints and tries from 25 simulated players (`lastmile/job_par.json`, written by
+`drop-order/tools/engine/par_sim.py`; `job_weights.json` is how hard each job is). The same simulated players
+stand in the field with the testers. How it's all worked out is at the top of `skill.js`.
+
+- `GET /lm/testers` (the admin key, and only from stevenhester.com, like `/lm/ratings`): every tester's numbers,
+  for the stats page.
+- `POST /lm/me` with `{"device": "<32 hex>"}`: that phone's own numbers, for the game's "Show my data". It says
+  nothing of how many testers there are, and never sends par. 60 an hour per address (`mePerIpHour`).
+
+`node lastmile/skill.test.js` checks both on an in-memory store.
+
 ### Level ratings (`/lm/ratings`)
 
 Testers who turn on "Rate levels" in Last Mile send a rating after each level (difficulty, fun and
