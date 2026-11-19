@@ -14,10 +14,11 @@ const TYPES = {
 };
 // Nana's BaNanagrams scales with the board: more tiles to pull, more time and a bigger banana.
 const durFor = (type, size) => (type === 'banana' ? (4 + size * size) * 1000 : TYPES[type].dur);
-const bananaFull = size => Math.round(size * size * 1.6);
-const QUIET_START = 15000; // let everyone settle in first
+// Filling the banana takes half the board's tiles.
+const bananaFull = size => Math.ceil((size * size) / 2);
+const QUIET_START = 18000; // let everyone settle in first
 const QUIET_END = 8000;    // and keep the last seconds clean
-const GAP = 6000;          // breathing room between events
+const GAP = 15000;         // at least this much calm between events
 
 const rnd = () => crypto.randomInt(1e9) / 1e9;
 
@@ -62,7 +63,7 @@ function plan(timeSec, size, allowed) {
   const window = T - QUIET_START - QUIET_END;
   if (window < 20000) return [];
   if (timeSec <= 60 && rnd() < 0.25) return []; // not every game gets chaos
-  let n = Math.round(timeSec / 50 + rnd() * 0.8 - 0.4);
+  let n = Math.round(timeSec / 70 + rnd() * 0.9 - 0.3);
   n = Math.max(1, Math.min(6, n));
   let pool = kinds.slice();
   let chosen = [];
@@ -87,7 +88,8 @@ function plan(timeSec, size, allowed) {
     if (j > 0) [chosen[i], chosen[j]] = [chosen[j], chosen[i]];
   }
   const spare = window - chosen.reduce((s, t) => s + len(t), 0) - GAP * Math.max(0, chosen.length - 1);
-  const cuts = Array.from({ length: chosen.length + 1 }, () => rnd());
+  // Uneven gaps: squaring the random cuts makes some lulls long and others short, so it never feels like a metronome.
+  const cuts = Array.from({ length: chosen.length + 1 }, () => Math.pow(rnd(), 1.8) + 0.05);
   const cutSum = cuts.reduce((a, b) => a + b, 0) || 1;
   let t = QUIET_START + (spare * cuts[0]) / cutSum;
   return chosen.map((type, i) => {

@@ -386,7 +386,7 @@ class Lobby {
       allyWords,
       rejected: [...(r.rejected.get(m.id) || new Map())].map(([w, x]) => ({ w, challenged: !!x.challenged })),
       chaos: r.chaos,
-      banana: b ? { removed: [...b.removed], count: b.count } : null,
+      banana: b ? { removed: [...b.removed], count: b.count, done: !!b.done } : null,
       bananaCounts: this.bananaCounts(),
       bananaSplit: r.bananaSplit,
       handicap: this.settings.handicap,
@@ -472,11 +472,23 @@ class Lobby {
     if (path.some(i => chaos.letterAt(r, i, matchMs) !== r.tiles[i])) this.bump(m.id, 'zWords');
     if (chaos.active(r.chaos, 'sam', ms)) this.bump(m.id, 'samWords');
     if (chaos.active(r.chaos, 'robbert', ms)) this.bump(m.id, 'robbertWords');
+    let bananaDone = false;
     if (banana) {
-      const b = bState || { removed: new Set(), count: 0 };
+      const b = bState || { removed: new Set(), count: 0, done: false };
       r.banana.set(m.id, b);
-      path.forEach(i => b.removed.add(i));
-      b.count += path.length;
+      if (!b.done) {
+        path.forEach(i => b.removed.add(i));
+        b.count += path.length;
+        // Half the board in the banana and it's done: the tiles come back, and the first one there wins the badge.
+        if (b.count >= banana.data.full) {
+          b.done = true;
+          b.removed.clear();
+          bananaDone = true;
+          const first = !r.bananaSplit.length;
+          if (first) { r.bananaSplit = [m.id]; const st2 = this.stat(m.id); st2.bananaSplit = true; st2.banana = b.count; }
+          this.later(() => this.broadcast({ t: 'bananaWin', id: m.id, first, count: b.count }), 50);
+        }
+      }
     }
     let leaked = false;
     const leak = chaos.active(r.chaos, 'leak', ms);
@@ -493,7 +505,7 @@ class Lobby {
         this.send(p, { t: 'leaked', w, from: m.id, pts: points(w) });
       }
     }
-    reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined });
+    reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined, bananaDone });
     if (c) {
       c.turnWords++;
       c.lastWordAt = Date.now();
@@ -516,12 +528,8 @@ class Lobby {
   bananaEnd() {
     const r = this.round;
     if (!r) return;
-    const counts = this.bananaCounts();
-    const best = Math.max(0, ...Object.values(counts));
-    r.bananaSplit = best > 0 ? Object.keys(counts).filter(id => counts[id] === best) : [];
-    for (const id of r.bananaSplit) { const s = this.stat(id); s.bananaSplit = true; s.banana = best; }
     for (const b of r.banana.values()) b.removed.clear();
-    this.broadcast({ t: 'bananaSplit', ids: r.bananaSplit, counts });
+    this.broadcast({ t: 'bananaEnd', winner: r.bananaSplit[0] || null, counts: this.bananaCounts() });
   }
 
   setCleared(m, ms) {
@@ -679,10 +687,8 @@ class Lobby {
     }
     words.sort((a, b) => a.w.length - b.w.length || a.finders.length - b.finders.length || a.w.localeCompare(b.w));
 
-    // Banana Split: +10% of the round for whoever filled their banana most.
-    const bananaBonus = {};
-    for (const id of r.bananaSplit) if (gross[id]) bananaBonus[id] = Math.ceil(gross[id] * 0.1);
-    const after = id => (gross[id] || 0) + (bananaBonus[id] || 0);
+    const bananaBonus = {}; // the Banana Split is a badge now, not points
+    const after = id => gross[id] || 0;
     const best = Math.max(0, ...players.map(p => after(p.id)));
 
     const out = [];

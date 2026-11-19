@@ -72,7 +72,7 @@ function award(ctx) {
     if (s.challengesWon) add(p.id, 62, { key: 'silver', icon: 'gavel', tone: 'good', title: 'Silver Tongue', desc: `Talked the table into ${s.challengesWon} word${s.challengesWon === 1 ? '' : 's'}` });
     if (s.challengesLost) add(p.id, 42, { key: 'overruled', icon: 'gavel', tone: 'bad', title: 'Overruled', desc: `The family said no ${s.challengesLost} time${s.challengesLost === 1 ? '' : 's'}` });
     // ----- chaos -----
-    if (s.bananaSplit) add(p.id, 85, { key: 'banana', icon: 'banana', tone: 'good', title: 'Banana Split', desc: `Filled the banana with ${s.banana} letters: +10%` });
+    if (s.bananaSplit) add(p.id, 85, { key: 'banana', icon: 'banana', tone: 'good', title: 'Banana Split', desc: `First to fill Nana's banana (${s.banana} letters)` });
     if (s.zWords) add(p.id, 52 + s.zWords * 5, { key: 'sleepwalk', icon: 'z', tone: 'funny', title: 'Sleepwalker', desc: `Made ${s.zWords} word${s.zWords === 1 ? '' : 's'} out of Z's` });
     if (s.samWords >= 2) add(p.id, 40 + s.samWords * 2, { key: 'pitcrew', icon: 'car', tone: 'good', title: 'Pit Crew', desc: `${s.samWords} words through the tire smoke` });
     if (s.setCleared) add(p.id, 48, { key: 'setmaster', icon: 'cards', tone: 'good', title: 'Set Master', desc: `Cleared every card in ${sec(s.setCleared)}` });
