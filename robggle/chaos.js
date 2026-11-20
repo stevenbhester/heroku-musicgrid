@@ -6,7 +6,7 @@ const crypto = require('crypto');
 // Longer, more involved events get more time; weight is how often each comes up.
 const TYPES = {
   sam:       { weight: 1.0, warn: 3000, dur: 14000 },
-  sleepover: { weight: 1.0, warn: 3000, dur: 16000 },
+  sleepover: { weight: 1.0, warn: 3000, dur: 22000 },
   robbert:   { weight: 0.9, warn: 3500, dur: 18000 },
   leak:      { weight: 0.8, warn: 3000, dur: 20000 },
   banana:    { weight: 0.8, warn: 3500, dur: 25000 },
@@ -39,20 +39,22 @@ function lines(size) {
   return out;
 }
 
-// Sleepover: three lines doze off one tile at a time, sleep a few seconds, then wake up.
+// Sleepover: three tiles scattered across the board get drowsy, nod off into Z's, snooze for most
+// of the event (long enough to find a word through them), then wake up one after another.
+const DROWSY_MS = 1800;
 function sleepoverData(size, dur) {
-  const all = lines(size);
-  const zs = [];
-  const count = 3;
-  const slot = dur / count;
-  for (let k = 0; k < count; k++) {
-    const line = all.splice(crypto.randomInt(all.length), 1)[0];
-    const order = rnd() < 0.5 ? line : line.slice().reverse();
-    const start = k * slot + 300;
-    const step = 320;
-    const hold = slot - 600 - order.length * step * 2;
-    order.forEach((tile, j) => zs.push({ tile, from: Math.round(start + j * step), to: Math.round(start + order.length * step + Math.max(1500, hold) + j * step) }));
+  const n = size * size;
+  const near = (a, b) => Math.abs(Math.floor(a / size) - Math.floor(b / size)) <= 1 && Math.abs((a % size) - (b % size)) <= 1;
+  let tiles = [];
+  for (let tries = 0; tries < 200; tries++) {
+    tiles = [];
+    while (tiles.length < 3) { const t = crypto.randomInt(n); if (!tiles.includes(t)) tiles.push(t); }
+    if (!tiles.some((a, i) => tiles.some((b, j) => i < j && near(a, b)))) break; // no two touching
   }
+  const zs = tiles.map((tile, k) => {
+    const drowsy = 300 + k * 900;
+    return { tile, drowsy, from: drowsy + DROWSY_MS, to: dur - 1400 - (2 - k) * 500 };
+  });
   return { zs };
 }
 
@@ -97,7 +99,7 @@ function plan(timeSec, size, allowed) {
     const ev = { id: `${type}${i}`, type, warnAt: Math.round(t), at: Math.round(t + spec.warn), dur: durFor(type, size), data: {} };
     if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
     if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
-    if (type === 'leak') ev.data = { chance: 0.25 };
+    if (type === 'leak') ev.data = { chance: 0.5 };
     if (type === 'banana') ev.data = { full: bananaFull(size) };
     t = ev.at + ev.dur + GAP + (spare * cuts[i + 1]) / cutSum;
     return ev;
@@ -127,7 +129,7 @@ function forced(types, size) {
     const ev = { id: `${type}${i}`, type, warnAt: t, at: t + spec.warn, dur: durFor(type, size), data: {} };
     if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
     if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
-    if (type === 'leak') ev.data = { chance: +(process.env.ROBGGLE_LEAK || 0.25) };
+    if (type === 'leak') ev.data = { chance: +(process.env.ROBGGLE_LEAK || 0.5) };
     if (type === 'banana') ev.data = { full: bananaFull(size) };
     t = ev.at + ev.dur + 2000;
     return ev;

@@ -15,14 +15,18 @@ const COMMON_MAX = 50;
 
 const valid = new Set();
 const common = new Set();
-for (const lvl of VALID_LEVELS) {
-  for (const raw of lists[`english/${lvl}`] || []) {
+// American spellings plus the British, Canadian and Australian ones (AXE, GREY, COLOUR): families mix them.
+// Only American words up to size 50 are shown as missed words, so nobody is told they missed COLOUR.
+const VARIANTS = ['', 'british/', 'canadian/', 'australian/'];
+const isBlocked = w => blocked.has(w) || (w.endsWith('s') && blocked.has(w.slice(0, -1))) || (w.endsWith('es') && blocked.has(w.slice(0, -2)));
+for (const v of VARIANTS) for (const lvl of VALID_LEVELS) {
+  for (const raw of lists[`english/${v}${lvl}`] || []) {
     if (!/^[a-z]+$/.test(raw)) continue; // drops proper nouns, accents, apostrophes
     if (raw.length < 3 || raw.length > 16) continue;
-    if (blocked.has(raw)) continue;
+    if (isBlocked(raw)) continue;
     if (!/[aeiouy]/.test(raw)) continue; // abbreviations like "dkl"
     valid.add(raw);
-    if (lvl <= COMMON_MAX) common.add(raw);
+    if (!v && lvl <= COMMON_MAX) common.add(raw);
   }
 }
 

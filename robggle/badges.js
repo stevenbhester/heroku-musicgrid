@@ -79,8 +79,8 @@ function award(ctx) {
     if (s.robbertBad >= 2) add(p.id, 43 + s.robbertBad, { key: 'robbert', icon: 'three', tone: 'bad', title: 'Robbert Disapproves', desc: `Tried ${s.robbertBad} long words during Robbert Mode` });
   }
   for (const x of leaders(s => s.robbertWords || 0, 3)) add(x.id, 45 + x.v * 2, { key: 'robbertok', icon: 'three', tone: 'good', title: 'Robbert Approved', desc: `${x.v} three-letter words on command` });
-  for (const x of leaders(s => s.leaked || 0, 1)) add(x.id, 47 + x.v * 3, { key: 'leaky', icon: 'drop', tone: 'funny', title: 'Leaky Faucet', desc: `${x.v} of your words leaked to everyone` });
-  for (const x of leaders(s => s.gotLeaks || 0, 3)) add(x.id, 41 + x.v, { key: 'freebies', icon: 'gift', tone: 'funny', title: 'Free Lunch', desc: `Got ${x.v} words without lifting a finger` });
+  for (const x of leaders(s => s.leaked || 0, 1)) add(x.id, 47 + x.v * 3, { key: 'leaky', icon: 'drop', tone: 'funny', title: 'Leaky Faucet', desc: `Steven & Erin told everyone about ${x.v} of your words` });
+  for (const x of leaders(s => s.tookTips || 0, 2)) add(x.id, 44 + x.v * 2, { key: 'eavesdrop', icon: 'gift', tone: 'funny', title: 'Eavesdropper', desc: `Found ${x.v} words Steven & Erin let slip` });
 
   for (const p of players) {
     const list = cands.get(p.id).sort((a, b) => b.score - a.score);

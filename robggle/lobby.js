@@ -261,7 +261,7 @@ class Lobby {
     const { size, minLen, time } = this.settings;
     const coop = this.settings.mode === 'coop';
     if (coop && !this.playerList().some(p => !p.bot)) return this.send(m, { t: 'error', msg: 'Pass the Pen needs at least one person.' });
-    const { tiles, words } = deal(size, minLen);
+    const { tiles, words } = deal(size, minLen, coop ? 240 : time);
     const salt = crypto.randomBytes(4).toString('hex');
     const now = Date.now();
     this.roundNo++;
@@ -278,6 +278,7 @@ class Lobby {
       challenges: [],       // { id, w, path, by: [{ id, at, path }] }
       banana: new Map(),    // memberId -> { removed: Set(tile), count }
       bananaSplit: [],
+      tips: new Map(),        // Steven & Erin: words announced to everyone -> who found them
       hashes: [...words.keys()].map(w => fnv(salt + w)),
       chaos: process.env.ROBGGLE_DEV && this.devForce ? chaos.forced(this.devForce, size) : this.settings.chaos ? chaos.plan(coop ? 300 : time, size, this.settings.chaosTypes.filter(t => !coop || t !== 'leak')) : [],
       coop: coop ? { idx: -1, holder: null, turnNo: 0, dryTurns: 0, turns: [], turnWords: 0, turnStart: 0, lastWordAt: 0, timer: null, ended: false } : null,
@@ -389,6 +390,7 @@ class Lobby {
       banana: b ? { removed: [...b.removed], count: b.count, done: !!b.done } : null,
       bananaCounts: this.bananaCounts(),
       bananaSplit: r.bananaSplit,
+      tips: [...r.tips].map(([w, x]) => ({ w, from: x.from, at: x.at })),
       handicap: this.settings.handicap,
       custom: [...this.customWords].map(w => fnv(r.salt + w)),
       mode: r.mode,
@@ -468,6 +470,8 @@ class Lobby {
     }
     mine.set(w, { at: ms, path, bonus, via, from });
     if (via === 'copy') { this.bump(m.id, 'copied'); this.bump(from, 'copiedFrom'); }
+    const tip = r.tips.get(w);
+    if (tip && tip.from !== m.id && tip.at < ms) { this.bump(m.id, 'tookTips'); this.bump(tip.from, 'tipTaken'); }
     if (bonus) this.bump(m.id, 'bridges');
     if (path.some(i => chaos.letterAt(r, i, matchMs) !== r.tiles[i])) this.bump(m.id, 'zWords');
     if (chaos.active(r.chaos, 'sam', ms)) this.bump(m.id, 'samWords');
@@ -490,20 +494,14 @@ class Lobby {
         }
       }
     }
+    // Steven & Erin's Alliance Mode: some words get announced to everyone. They still have to find them.
     let leaked = false;
     const leak = chaos.active(r.chaos, 'leak', ms);
-    if (leak && crypto.randomInt(1000) < leak.data.chance * 1000) {
+    if (leak && !r.tips.has(w) && crypto.randomInt(1000) < leak.data.chance * 1000) {
       leaked = true;
+      r.tips.set(w, { from: m.id, at: ms });
       this.bump(m.id, 'leaked');
-      for (const p of this.playerList()) {
-        if (p.id === m.id) continue;
-        let f = r.found.get(p.id);
-        if (!f) r.found.set(p.id, (f = new Map()));
-        if (f.has(w)) continue;
-        f.set(w, { at: ms, path, bonus: 0, via: 'leak', from: m.id });
-        this.bump(p.id, 'gotLeaks');
-        this.send(p, { t: 'leaked', w, from: m.id, pts: points(w) });
-      }
+      this.later(() => this.broadcast({ t: 'tip', w, from: m.id, at: ms }), 30);
     }
     reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined, bananaDone });
     if (c) {
