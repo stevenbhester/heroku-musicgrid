@@ -64,6 +64,7 @@ function attach(server, path) {
         case 'removeBot': return lobby.removeBot(m, String(msg.id));
         case 'alliance': return lobby.setAlliance(m, msg.id);
         case 'rename': lobby.rename(m, msg.name); return;
+        case 'buildStuck': return lobby.buildStuck(m);
         case 'lobby': return lobby.backToLobby(m);
         case 'resetScores': return lobby.resetScores(m);
         case 'leave': lobby.leave(m); ws.member = null; ws.lobby = null; return;

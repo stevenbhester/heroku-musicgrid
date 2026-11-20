@@ -64,8 +64,24 @@ class Lobby {
     lobbies.set(this.code, this);
   }
 
+  // ---------- builds ----------
+  // People on an older build than someone else here. Their page reloads itself (back into this lobby)
+  // within a few seconds, so a round waits for them. Pages from before build numbers (0) can't update
+  // themselves, and a page that reloaded twice and is still old says so; neither holds the game up.
+  behindBuild() {
+    const live = [...this.members.values()].filter(x => x.connected && !x.bot);
+    const newest = Math.max(0, ...live.map(x => x.build || 0));
+    return live.filter(x => x.build > 0 && x.build < newest && !x.buildStuck);
+  }
+
+  buildStuck(m) {
+    if (m.buildStuck) return;
+    m.buildStuck = true;
+    this.broadcastState();
+  }
+
   // ---------- membership ----------
-  join(ws, { role, name, token }) {
+  join(ws, { role, name, token, build, app }) {
     let m = token && [...this.members.values()].find(x => x.token === token);
     if (m) {
       if (m.ws && m.ws !== ws) { try { m.ws.close(4000, 'replaced'); } catch {} }
@@ -90,6 +106,11 @@ class Lobby {
       this.members.set(m.id, m);
       if (!this.hostId) this.hostId = m.id;
     }
+    // Which build of the game this device runs (0: an unpublished copy or a page from before builds existed).
+    const b = Math.max(0, Math.floor(+build) || 0);
+    if (b !== m.build) m.buildStuck = false;
+    m.build = b;
+    m.app = app == null ? null : Math.max(1, Math.floor(+app) || 1);
     ws.member = m; ws.lobby = this;
     this.emptySince = 0;
     this.send(m, { t: 'joined', code: this.code, you: { id: m.id, token: m.token, role: m.role } });
@@ -258,6 +279,8 @@ class Lobby {
     if (m.id !== this.hostId || (this.phase !== 'lobby' && this.phase !== 'results')) return;
     if (!this.playerList().length) return this.send(m, { t: 'error', msg: 'Need at least one player.' });
     this.clearTimers();
+    const behind = this.behindBuild();
+    if (behind.length) return this.send(m, { t: 'error', msg: `Waiting for ${behind.map(x => x.role === 'screen' ? 'the TV' : x.name).join(', ')} to update. Try again in a few seconds.` });
     const { size, minLen, time } = this.settings;
     const coop = this.settings.mode === 'coop';
     if (coop && !this.playerList().some(p => !p.bot)) return this.send(m, { t: 'error', msg: 'Pass the Pen needs at least one person.' });
@@ -804,7 +827,7 @@ class Lobby {
   publicState() {
     return {
       t: 'state', code: this.code, phase: this.phase, hostId: this.hostId, settings: this.settings, roundNo: this.roundNo,
-      members: [...this.members.values()].map(m => ({ id: m.id, role: m.role, name: m.name, color: m.color, alliance: m.alliance, total: m.total, connected: m.connected, bot: m.bot || null, hcp: m.role === 'player' ? this.handicapIndex(m) : 0 })),
+      members: [...this.members.values()].map(m => ({ id: m.id, role: m.role, name: m.name, color: m.color, alliance: m.alliance, total: m.total, connected: m.connected, bot: m.bot || null, hcp: m.role === 'player' ? this.handicapIndex(m) : 0, build: m.build || 0, app: m.app ?? null })),
       alliances: [...this.alliances.values()],
       counts: this.counts(),
     };
