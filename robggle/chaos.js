@@ -11,7 +11,15 @@ const TYPES = {
   leak:      { weight: 0.8, warn: 3000, dur: 20000 },
   banana:    { weight: 0.8, warn: 3500, dur: 25000 },
   set:       { weight: 0.6, warn: 5000, dur: 40000 },
+  monster:   { weight: 0.9, warn: 3000, dur: 16000 },
+  swap:      { weight: 0.9, warn: 3500, dur: 24000 },
+  climb:     { weight: 0.8, warn: 3500, dur: 25000 },
+  launch:    { weight: 0.8, warn: 3500, dur: 14000 },
+  wordle:    { weight: 0.6, warn: 4000, dur: 40000 },
 };
+// Events that depend on each player's own words, so they sit out Pass the Pen (one pen, one list).
+// (G-ma's Wordle does run there: the whole team shares one set of clues.)
+const SOLO_ONLY = ['leak', 'climb', 'launch'];
 // Nana's BaNanagrams scales with the board: more tiles to pull, more time and a bigger banana.
 const durFor = (type, size) => (type === 'banana' ? (4 + size * size) * 1000 : TYPES[type].dur);
 // Filling the banana takes half the board's tiles.
@@ -58,6 +66,66 @@ function sleepoverData(size, dur) {
   return { zs };
 }
 
+// P-pa Monster: the monster sits on one tile and hops to a new one every few seconds.
+function monsterData(size, dur) {
+  const n = size * size;
+  const hops = [];
+  let last = -1;
+  for (let at = 0; at < dur - 2000; at += 4000) {
+    let tile;
+    do { tile = crypto.randomInt(n); } while (tile === last);
+    hops.push({ at, tile });
+    last = tile;
+  }
+  return { hops };
+}
+
+// Violet & Orin Run Around Time: pairs of touching tiles swap places, in three waves. Later waves build on
+// earlier ones (a tile can travel), and everything goes home when the event ends.
+function swapData(size, dur) {
+  const n = size * size;
+  const touching = (a, b) => a !== b && Math.abs(Math.floor(a / size) - Math.floor(b / size)) <= 1 && Math.abs((a % size) - (b % size)) <= 1;
+  const waves = [];
+  for (let k = 0; k < 3; k++) {
+    const pairs = [], used = new Set();
+    for (let tries = 0; tries < 200 && pairs.length < size - 2 + (k ? 1 : 0); tries++) {
+      const a = crypto.randomInt(n), b = crypto.randomInt(n);
+      if (!touching(a, b) || used.has(a) || used.has(b)) continue;
+      used.add(a); used.add(b);
+      pairs.push([a, b]);
+    }
+    waves.push({ at: Math.round((dur * k) / 3), pairs });
+  }
+  return { waves };
+}
+
+// Which original tile's letter sits at each spot, `rel` ms into a swap event.
+function arrangement(e, rel, n) {
+  const at = Array.from({ length: n }, (_, i) => i);
+  for (const w of e.data.waves) {
+    if (rel < w.at) break;
+    for (const [a, b] of w.pairs) [at[a], at[b]] = [at[b], at[a]];
+  }
+  return at;
+}
+
+// The tile the monster is on, `rel` ms into its event.
+function monsterTile(e, rel) {
+  let tile = e.data.hops[0].tile;
+  for (const h of e.data.hops) if (rel >= h.at) tile = h.tile;
+  return tile;
+}
+
+function dataFor(type, size, dur, dev) {
+  if (type === 'sleepover') return sleepoverData(size, TYPES.sleepover.dur);
+  if (type === 'sam') return { seed: crypto.randomInt(1e6) };
+  if (type === 'leak') return { chance: dev ? +(process.env.ROBGGLE_LEAK || 0.5) : 0.5 };
+  if (type === 'banana') return { full: bananaFull(size) };
+  if (type === 'monster') return monsterData(size, dur);
+  if (type === 'swap') return swapData(size, dur);
+  return {};
+}
+
 function plan(timeSec, size, allowed) {
   const kinds = Object.keys(TYPES).filter(t => !allowed || allowed.includes(t));
   if (!kinds.length) return [];
@@ -97,10 +165,7 @@ function plan(timeSec, size, allowed) {
   return chosen.map((type, i) => {
     const spec = TYPES[type];
     const ev = { id: `${type}${i}`, type, warnAt: Math.round(t), at: Math.round(t + spec.warn), dur: durFor(type, size), data: {} };
-    if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
-    if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
-    if (type === 'leak') ev.data = { chance: 0.5 };
-    if (type === 'banana') ev.data = { full: bananaFull(size) };
+    ev.data = dataFor(type, size, ev.dur);
     t = ev.at + ev.dur + GAP + (spare * cuts[i + 1]) / cutSum;
     return ev;
   });
@@ -111,13 +176,15 @@ function active(events, type, ms) {
   return (events || []).find(e => e.type === type && ms >= e.at && ms < e.at + e.dur) || null;
 }
 
-// The letter on a tile `ms` into the round (sleepover turns tiles into Z).
+// The letter on a tile `ms` into the round (sleepover turns tiles into Z; Violet & Orin move letters around).
 function letterAt(round, i, ms) {
   const e = active(round.chaos, 'sleepover', ms);
   if (e) {
     const rel = ms - e.at;
     if (e.data.zs.some(z => z.tile === i && rel >= z.from && rel < z.to)) return 'z';
   }
+  const s = active(round.chaos, 'swap', ms);
+  if (s) return round.tiles[arrangement(s, ms - s.at, round.tiles.length)[i]];
   return round.tiles[i];
 }
 
@@ -127,13 +194,21 @@ function forced(types, size) {
   return types.filter(x => TYPES[x]).map((type, i) => {
     const spec = TYPES[type];
     const ev = { id: `${type}${i}`, type, warnAt: t, at: t + spec.warn, dur: durFor(type, size), data: {} };
-    if (type === 'sleepover') ev.data = sleepoverData(size, spec.dur);
-    if (type === 'sam') ev.data = { seed: crypto.randomInt(1e6) };
-    if (type === 'leak') ev.data = { chance: +(process.env.ROBGGLE_LEAK || 0.5) };
-    if (type === 'banana') ev.data = { full: bananaFull(size) };
+    ev.data = dataFor(type, size, ev.dur, true);
     t = ev.at + ev.dur + 2000;
     return ev;
   });
 }
 
-module.exports = { plan, forced, active, letterAt, TYPES };
+// Wordle's marks for a guess against the hidden word: g (right spot), y (in the word, elsewhere), x (not in it).
+// A guess of any length gets marks; only its first five spots can be green.
+function wordleMarks(guess, target) {
+  const g = [...guess], t = [...target];
+  const marks = g.map(() => 'x');
+  const left = {};
+  t.forEach((c, i) => { if (g[i] === c) marks[i] = 'g'; else left[c] = (left[c] || 0) + 1; });
+  g.forEach((c, i) => { if (marks[i] !== 'g' && left[c] > 0) { marks[i] = 'y'; left[c]--; } });
+  return marks;
+}
+
+module.exports = { wordleMarks, plan, forced, active, letterAt, monsterTile, TYPES, SOLO_ONLY };

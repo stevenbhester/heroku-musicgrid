@@ -1,6 +1,6 @@
 // One Lobby per game. The server is the only clock and the only judge of words.
 const crypto = require('crypto');
-const { deal, points, fnv, common } = require('./board');
+const { deal, solve, points, fnv, common } = require('./board');
 const { valid } = require('./dict');
 const chaos = require('./chaos');
 const { award } = require('./badges');
@@ -16,6 +16,7 @@ const ALLY_NOUN = ['Pickles', 'Owls', 'Meatballs', 'Raccoons', 'Noodles', 'Gobli
 
 const COUNTDOWN_MS = 3600;
 const GRACE_MS = 1500;       // words traced at the buzzer still count while they travel
+const GUESS_LOCK_MS = 5000; // Thou Shalt Not Guess: the time-out after two wrong words in a row
 const HOST_HANDOFF_MS = 30000;
 const SOLO_MULT = 2;
 const VOTE_MS = 12000;
@@ -53,7 +54,7 @@ class Lobby {
     this.alliances = new Map();
     this.hostId = null;
     this.phase = 'lobby';
-    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, funAwards: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES), mode: 'versus', penTime: 45, dryTime: 15 };
+    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, funAwards: false, noGuess: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES), mode: 'versus', penTime: 45, dryTime: 15 };
     this.customWords = new Set(); // challenged words the family voted in
     this.revealSpeed = 1;
     this.round = null;
@@ -211,6 +212,7 @@ class Lobby {
             (setEv && ms >= setEv.at && ms < setPauseUntil) ||
             (chaos.active(r.chaos, 'robbert', ms) && x.w.length !== 3) ||
             (chaos.active(r.chaos, 'banana', ms) && r.banana.get(b.id) && x.path.some(i => r.banana.get(b.id).removed.has(i))) ||
+            (chaos.active(r.chaos, 'launch', ms) && r.launch.get(b.id) && x.path.some(i => r.launch.get(b.id).tiles.has(i))) ||
             this.wordAt(x.path, ms) !== x.w;
           if (blocked) { this.later(tryIt, 2500 + crypto.randomInt(2000)); return; }
           this.word(b, x.w, x.path);
@@ -262,6 +264,7 @@ class Lobby {
       size, minLen,
       time: clamp(s.time, 30, 600, this.settings.time),
       handicap: s.handicap == null ? this.settings.handicap : !!s.handicap,
+      noGuess: s.noGuess == null ? this.settings.noGuess : !!s.noGuess,
       funAwards: s.funAwards == null ? this.settings.funAwards : !!s.funAwards,
       chaos: s.chaos == null ? this.settings.chaos : !!s.chaos,
       chaosTypes: this.settings.chaosTypes,
@@ -289,6 +292,12 @@ class Lobby {
     const { tiles, words } = deal(size, minLen, coop ? 240 : time);
     const salt = crypto.randomBytes(4).toString('hex');
     const now = Date.now();
+    // G-ma's Wordle needs 5-letter words in play, and a few everyday ones on the board to hide.
+    const fives = [...words.keys()].filter(w => w.length === 5 && common.has(w)).length;
+    const okType = t => (!coop || !chaos.SOLO_ONLY.includes(t)) && (t !== 'wordle' || (minLen <= 5 && fives >= 4));
+    const plan = process.env.ROBGGLE_DEV && this.devForce ? chaos.forced(this.devForce, size) : this.settings.chaos ? chaos.plan(coop ? 300 : time, size, this.settings.chaosTypes.filter(okType)) : [];
+    // Robbert Mode asks for 3-letter words, so they count while he's on even when the shortest word is longer.
+    const threes = minLen > 3 && plan.some(e => e.type === 'robbert') ? [...solve(tiles, size, 3).keys()].filter(w => w.length === 3) : [];
     this.roundNo++;
     this.revealSpeed = 1;
     this.vote = null;
@@ -303,9 +312,13 @@ class Lobby {
       challenges: [],       // { id, w, path, by: [{ id, at, path }] }
       banana: new Map(),    // memberId -> { removed: Set(tile), count }
       bananaSplit: [],
+      climb: new Map(),     // Charlie: memberId -> how many times they've used each tile during his event
+      launch: new Map(),    // Jess: memberId -> { letter, tiles: Set } blasted into space
+      wordle: null,         // G-ma: { word, by: Map(memberId, or 'team' in Pass the Pen -> [{ w, marks }]), winner, n }
+      guess: new Map(),     // Thou Shalt Not Guess: memberId -> { streak, until }
       tips: new Map(),        // Steven & Erin: words announced to everyone -> who found them
-      hashes: [...words.keys()].map(w => fnv(salt + w)),
-      chaos: process.env.ROBGGLE_DEV && this.devForce ? chaos.forced(this.devForce, size) : this.settings.chaos ? chaos.plan(coop ? 300 : time, size, this.settings.chaosTypes.filter(t => !coop || t !== 'leak')) : [],
+      hashes: [...words.keys(), ...threes].map(w => fnv(salt + w)),
+      chaos: plan,
       coop: coop ? { idx: -1, holder: null, turnNo: 0, dryTurns: 0, turns: [], turnWords: 0, turnStart: 0, lastWordAt: 0, timer: null, ended: false } : null,
     };
     this.phase = 'countdown';
@@ -315,6 +328,11 @@ class Lobby {
     this.later(() => { this.phase = 'playing'; this.broadcastState(); }, COUNTDOWN_MS);
     for (const e of this.round.chaos) {
       if (e.type === 'banana') this.later(() => this.bananaEnd(), this.round.startAt + e.at + e.dur - now);
+      if (e.type === 'launch') this.later(() => this.launchStart(e), this.round.startAt + e.at - now);
+      if (e.type === 'wordle') {
+        this.later(() => this.wordleStart(e), this.round.startAt + e.at - now);
+        this.later(() => this.wordleEnd(e), this.round.startAt + e.at + e.dur - now);
+      }
     }
     this.later(() => this.finish(), this.round.endsAt - now + GRACE_MS);
     if (coop) this.later(() => this.nextTurn(), COUNTDOWN_MS);
@@ -415,6 +433,10 @@ class Lobby {
       banana: b ? { removed: [...b.removed], count: b.count, done: !!b.done } : null,
       bananaCounts: this.bananaCounts(),
       bananaSplit: r.bananaSplit,
+      climb: r.climb.get(m.id) || null,
+      launch: r.launch.get(m.id) ? { id: r.launch.get(m.id).id, letter: r.launch.get(m.id).letter, tiles: [...r.launch.get(m.id).tiles] } : null,
+      lock: r.guess.get(m.id) ? Math.max(0, r.guess.get(m.id).until - Date.now()) : 0,
+      wordle: r.wordle ? { id: r.wordle.id, guesses: r.wordle.by.get(r.coop ? 'team' : m.id) || [], winner: r.wordle.winner, n: r.wordle.n, word: r.wordle.winner ? r.wordle.word : null } : null,
       tips: [...r.tips].map(([w, x]) => ({ w, from: x.from, at: x.at })),
       handicap: this.settings.handicap,
       custom: [...this.customWords].map(w => fnv(r.salt + w)),
@@ -461,6 +483,9 @@ class Lobby {
     const reply = (ok, reason, extra = {}) => this.send(m, { t: 'wordResult', w, ok, reason, ...extra });
     if (this.phase !== 'playing' && this.phase !== 'countdown') return reply(false, 'time');
     if (now < r.startAt - 300 || now > r.endsAt + GRACE_MS) return reply(false, 'time');
+    // Thou Shalt Not Guess: two wrong words in a row and you sit out for a few seconds.
+    const guess = this.settings.noGuess ? r.guess.get(m.id) || { streak: 0, until: 0 } : null;
+    if (guess && now < guess.until) return reply(false, 'locked', { lock: guess.until - now });
     const st = this.stat(m.id);
     st.times.push(ms);
     if (!this.validPath(path)) return reply(false, 'path');
@@ -470,20 +495,35 @@ class Lobby {
     const banana = chaos.active(r.chaos, 'banana', ms);
     const bState = r.banana.get(m.id);
     if (banana && bState && path.some(i => bState.removed.has(i))) return reply(false, 'banana');
-    if (chaos.active(r.chaos, 'robbert', ms) && w.length !== 3) { this.bump(m.id, 'robbertBad'); return reply(false, 'robbert'); }
-    if (w.length < r.minLen) return reply(false, 'short');
+    const launched = chaos.active(r.chaos, 'launch', ms) && r.launch.get(m.id);
+    if (launched && path.some(i => launched.tiles.has(i))) return reply(false, 'launch');
+    // (Computer players don't take part: one rattling off words shouldn't end G-ma's chat for the family.)
+    const wordle = r.wordle && !r.wordle.winner && !m.bot && chaos.active(r.chaos, 'wordle', ms) ? r.wordle : null;
+    const robbert = chaos.active(r.chaos, 'robbert', ms);
+    if (robbert && w.length !== 3) { this.bump(m.id, 'robbertBad'); return reply(false, 'robbert'); }
+    if (w.length < r.minLen && !robbert) return reply(false, 'short');
     const c = r.coop;
     if (c && (c.ended || m.id !== c.holder)) return reply(false, 'notyou');
     let mine = r.found.get(m.id);
     if (!mine) r.found.set(m.id, (mine = new Map()));
-    if (mine.has(w)) return reply(false, 'dupe');
-    if (c && [...r.found.values()].some(f => f.has(w))) return reply(false, 'teamdupe');
+    if (mine.has(w)) {
+      // A word you already have still works as a Wordle guess (no points twice).
+      if (wordle && w.length >= r.minLen) this.wordleGuess(m, w);
+      return reply(false, 'dupe');
+    }
+    if (c && [...r.found.values()].some(f => f.has(w))) {
+      if (wordle) this.wordleGuess(m, w); // a word the team already has is still a guess
+      return reply(false, 'teamdupe');
+    }
     if (!valid.has(w) && !this.customWords.has(w)) {
       if (!r.rejected.has(m.id)) r.rejected.set(m.id, new Map());
       if (!r.rejected.get(m.id).has(w)) r.rejected.get(m.id).set(w, { path, at: ms });
       st.rejected++;
       const used = [...r.rejected.get(m.id).values()].filter(x => x.challenged).length;
-      return reply(false, 'bad', { challengeable: used < MAX_CHALLENGES });
+      let lock = 0;
+      if (guess && ++guess.streak >= 2) { guess.streak = 0; guess.until = now + GUESS_LOCK_MS; lock = GUESS_LOCK_MS; this.bump(m.id, 'lockouts'); }
+      if (guess) r.guess.set(m.id, guess);
+      return reply(false, 'bad', { challengeable: used < MAX_CHALLENGES, lock });
     }
 
     // Accepted.
@@ -494,11 +534,22 @@ class Lobby {
       if (x && x.via !== 'leak' && x.at < ms) { via = 'copy'; from = a.id; }
     }
     mine.set(w, { at: ms, path, bonus, via, from });
+    if (guess) { guess.streak = 0; r.guess.set(m.id, guess); }
     if (via === 'copy') { this.bump(m.id, 'copied'); this.bump(from, 'copiedFrom'); }
     const tip = r.tips.get(w);
     if (tip && tip.from !== m.id && tip.at < ms) { this.bump(m.id, 'tookTips'); this.bump(tip.from, 'tipTaken'); }
     if (bonus) this.bump(m.id, 'bridges');
-    if (path.some(i => chaos.letterAt(r, i, matchMs) !== r.tiles[i])) this.bump(m.id, 'zWords');
+    const moved = path.some(i => chaos.letterAt(r, i, matchMs) !== r.tiles[i]);
+    if (moved && chaos.active(r.chaos, 'sleepover', matchMs)) this.bump(m.id, 'zWords');
+    if (moved && chaos.active(r.chaos, 'swap', matchMs)) this.bump(m.id, 'swapWords');
+    const monster = chaos.active(r.chaos, 'monster', ms);
+    if (monster && path.includes(chaos.monsterTile(monster, ms - monster.at))) this.bump(m.id, 'monsterWords');
+    if (chaos.active(r.chaos, 'climb', ms)) {
+      const heights = r.climb.get(m.id) || new Array(r.tiles.length).fill(0);
+      path.forEach(i => { heights[i]++; });
+      r.climb.set(m.id, heights);
+    }
+    if (launched) this.bump(m.id, 'launchWords');
     if (chaos.active(r.chaos, 'sam', ms)) this.bump(m.id, 'samWords');
     if (chaos.active(r.chaos, 'robbert', ms)) this.bump(m.id, 'robbertWords');
     let bananaDone = false;
@@ -529,6 +580,7 @@ class Lobby {
       this.later(() => this.broadcast({ t: 'tip', w, from: m.id, at: ms }), 30);
     }
     reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined, bananaDone });
+    if (wordle) this.wordleGuess(m, w);
     if (c) {
       c.turnWords++;
       c.lastWordAt = Date.now();
@@ -540,6 +592,70 @@ class Lobby {
     for (const a of this.allies(m)) this.send(a, { t: 'ally', w, by: m.id, path });
     this.broadcast({ t: 'counts', counts: this.counts(), banana: banana ? this.bananaCounts() : undefined });
     if (bonus) this.broadcast({ t: 'bridge', id: m.id, kind: bonus === 5 ? 'both' : 'one', bonus });
+  }
+
+  // Jess's Launchpad: each player's most-used letter (by the tiles their words went through) blasts off.
+  launchStart(e) {
+    const r = this.round;
+    if (!r || this.phase !== 'playing') return;
+    for (const m of this.playerList()) {
+      const used = {};
+      for (const [, x] of r.found.get(m.id) || []) if (x.via !== 'leak' && x.path) for (const i of x.path) used[r.tiles[i]] = (used[r.tiles[i]] || 0) + 1;
+      // Nobody's used anything yet? Then it's whichever letter the board has most of.
+      if (!Object.keys(used).length) for (const t of r.tiles) used[t] = (used[t] || 0) + 1;
+      const letter = Object.keys(used).sort((a, b) => used[b] - used[a] || a.localeCompare(b))[0];
+      const tiles = r.tiles.map((t, i) => (t === letter ? i : -1)).filter(i => i >= 0);
+      r.launch.set(m.id, { id: e.id, letter, tiles: new Set(tiles) });
+      this.stat(m.id).launchLetter = letter;
+      this.send(m, { t: 'launch', id: e.id, letter, tiles });
+    }
+  }
+
+  // G-ma's Wordle Chat: hide an everyday 5-letter word from this board that nobody has played yet.
+  wordleStart(e) {
+    const r = this.round;
+    if (!r || this.phase !== 'playing') return;
+    const played = new Set();
+    for (const f of r.found.values()) for (const w of f.keys()) played.add(w);
+    const five = [...r.words.keys()].filter(w => w.length === 5);
+    const pool = [five.filter(w => common.has(w) && !played.has(w)), five.filter(w => !played.has(w)), five].find(p => p.length);
+    if (!pool) return;
+    r.wordle = { id: e.id, word: pool[crypto.randomInt(pool.length)], by: new Map(), winner: null, n: 0 };
+  }
+
+  // In Pass the Pen the whole team shares one list of guesses and everyone sees every clue.
+  wordleGuess(m, w) {
+    const r = this.round, W = r.wordle;
+    const key = r.coop ? 'team' : m.id;
+    const list = W.by.get(key) || [];
+    W.by.set(key, list);
+    const marks = chaos.wordleMarks(w, W.word);
+    list.push({ w, marks });
+    const clue = { t: 'wordle', w, marks, n: list.length };
+    if (r.coop) this.broadcast(clue); else this.send(m, clue);
+    if (w !== W.word) return;
+    W.winner = m.id;
+    W.n = list.length;
+    for (const p of r.coop ? this.playerList() : [m]) this.stat(p.id).wordleWin = list.length;
+    this.broadcast({ t: 'wordleWin', id: m.id, n: list.length, word: W.word, team: !!r.coop });
+  }
+
+  // Pass the Pen: someone holds a letter to point at it, and it glows in their color for everyone.
+  point(m, tile) {
+    const r = this.round;
+    if (!r || !r.coop || this.phase !== 'playing' || m.role !== 'player') return;
+    const i = Math.floor(+tile);
+    if (!(i >= 0 && i < r.tiles.length)) return;
+    if (Date.now() - (m.pointedAt || 0) < 250) return;
+    m.pointedAt = Date.now();
+    this.broadcast({ t: 'point', id: m.id, tile: i });
+  }
+
+  wordleEnd() {
+    const W = this.round && this.round.wordle;
+    if (!W || W.winner || W.over) return;
+    W.over = true;
+    this.broadcast({ t: 'wordleEnd', word: W.word });
   }
 
   bananaCounts() {
@@ -776,6 +892,8 @@ class Lobby {
       s.orderWords = s.words;
       s.wordTimes = own.map(([, x]) => x.at);
       s.bridges = bridgeCount[m.id] || 0;
+      const heights = r.climb.get(m.id);
+      if (heights) { s.climbTop = Math.max(...heights); s.climbLetter = r.tiles[heights.indexOf(s.climbTop)]; }
       perPlayer.set(m.id, s);
     }
     const badges = award({ players: out, perPlayer, roundMs: r.endsAt - r.startAt, words, coop: !!r.coop });

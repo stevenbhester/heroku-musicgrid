@@ -80,6 +80,16 @@ function award(ctx) {
     if (s.setCleared) add(p.id, 48, { key: 'setmaster', icon: 'cards', tone: 'good', title: 'Set Master', desc: `Cleared every card in ${sec(s.setCleared)}` });
     if (s.robbertBad >= 2) add(p.id, 43 + s.robbertBad, { key: 'robbert', icon: 'three', tone: 'bad', title: 'Robbert Disapproves', desc: `Tried ${s.robbertBad} long words during Robbert Mode` });
   }
+  // ----- newer chaos (the Wordle and the tallest tile are those events' prizes, so they always show) -----
+  for (const x of leaders(s => s.climbTop || 0, 2)) add(x.id, 400 + x.v, { key: 'summit', icon: 'climb', tone: 'good', title: 'Top of the Climb', desc: `Stacked the ${String(st(x.id).climbLetter || '?').toUpperCase()} tile ${x.v} high for Charlie` });
+  for (const x of leaders(s => s.monsterWords || 0, 1)) add(x.id, 46 + x.v * 3, { key: 'tamer', icon: 'monster', tone: 'funny', title: 'Monster Tamer', desc: `Used P-pa Monster's tile ${x.v} time${x.v === 1 ? '' : 's'} without flinching` });
+  for (const x of leaders(s => s.swapWords || 0, 1)) add(x.id, 48 + x.v * 3, { key: 'tag', icon: 'swap', tone: 'good', title: 'Tag, You\'re It', desc: `${x.v} word${x.v === 1 ? '' : 's'} out of Violet & Orin's swaps` });
+  for (const p of players) {
+    const s = st(p.id);
+    if (s.lockouts) add(p.id, 49 + s.lockouts * 3, { key: 'nuhuh', icon: 'book', tone: 'bad', title: 'Nuh-Uh-Uh', desc: `Sent to time-out ${s.lockouts} time${s.lockouts === 1 ? '' : 's'} for guessing` });
+    if (s.wordleWin) add(p.id, 500, { key: 'wordle', icon: 'wordle', tone: 'good', title: 'Wordle Wizard', desc: `Got G-ma's Wordle in ${s.wordleWin}` });
+    if (s.launchWords >= 2) add(p.id, 44 + s.launchWords * 2, { key: 'houston', icon: 'launch', tone: 'good', title: 'Houston, No Problem', desc: `${s.launchWords} words while your ${String(s.launchLetter || '?').toUpperCase()}'s were in space` });
+  }
   for (const x of leaders(s => s.robbertWords || 0, 3)) add(x.id, 45 + x.v * 2, { key: 'robbertok', icon: 'three', tone: 'good', title: 'Robbert Approved', desc: `${x.v} three-letter words on command` });
   for (const x of leaders(s => s.leaked || 0, 1)) add(x.id, 47 + x.v * 3, { key: 'leaky', icon: 'drop', tone: 'funny', title: 'Leaky Faucet', desc: `Steven & Erin told everyone about ${x.v} of your words` });
   for (const x of leaders(s => s.tookTips || 0, 2)) add(x.id, 44 + x.v * 2, { key: 'eavesdrop', icon: 'gift', tone: 'funny', title: 'Eavesdropper', desc: `Found ${x.v} words Steven & Erin let slip` });

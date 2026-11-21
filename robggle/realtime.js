@@ -60,6 +60,7 @@ function attach(server, path) {
         case 'attitude': return lobby.attitude(m, msg.kind);
         case 'brag': return lobby.brag(m, msg.w);
         case 'setCleared': return lobby.setCleared(m, msg.ms);
+        case 'point': return lobby.point(m, msg.tile);
         case 'passPen': return lobby.passPen(m);
         case 'addBot': return lobby.addBot(m, String(msg.level));
         case 'removeBot': return lobby.removeBot(m, String(msg.id));
