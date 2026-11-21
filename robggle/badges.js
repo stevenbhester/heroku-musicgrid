@@ -21,6 +21,8 @@ function award(ctx) {
   // ----- results -----
   if (multi && ranked[0] && ranked[0].round > 0) {
     const tied = ranked.filter(p => p.round === ranked[0].round);
+    // The winner gets a virtual KitKat with a bunch of ice. It always shows first.
+    if (!coop) for (const p of tied) add(p.id, 1000, { key: 'kitkat', icon: 'kitkat', tone: 'treat', title: 'KitKat on the Rocks', desc: tied.length > 1 ? 'A virtual KitKat with a bunch of ice. Split it fairly.' : 'A virtual KitKat with a bunch of ice. You earned it.' });
     for (const p of tied) add(p.id, 100, coop ? { key: 'champ', icon: 'crown', tone: 'good', title: 'Team MVP', desc: `Wrote down ${p.round} points for the team` } : { key: 'champ', icon: 'crown', tone: 'good', title: tied.length > 1 ? 'Co-Champion' : 'Top of the Pile', desc: `Won the round with ${p.round} points` });
   }
   if (multi && ranked.length > 2) {

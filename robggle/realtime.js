@@ -58,6 +58,7 @@ function attach(server, path) {
         case 'castVote': return lobby.castVote(m, msg.id, !!msg.yes);
         case 'revealCtl': return lobby.revealCtl(m, msg);
         case 'attitude': return lobby.attitude(m, msg.kind);
+        case 'brag': return lobby.brag(m, msg.w);
         case 'setCleared': return lobby.setCleared(m, msg.ms);
         case 'passPen': return lobby.passPen(m);
         case 'addBot': return lobby.addBot(m, String(msg.level));

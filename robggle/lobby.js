@@ -5,6 +5,7 @@ const { valid } = require('./dict');
 const chaos = require('./chaos');
 const { award } = require('./badges');
 const banter = require('./banter');
+const funAwards = require('./awards');
 const bots = require('./bots');
 
 const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ'; // no vowels, so codes never spell words
@@ -52,7 +53,7 @@ class Lobby {
     this.alliances = new Map();
     this.hostId = null;
     this.phase = 'lobby';
-    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES), mode: 'versus', penTime: 45, dryTime: 15 };
+    this.settings = { size: 4, minLen: 3, time: 120, handicap: false, funAwards: false, chaos: false, chaosTypes: Object.keys(chaos.TYPES), mode: 'versus', penTime: 45, dryTime: 15 };
     this.customWords = new Set(); // challenged words the family voted in
     this.revealSpeed = 1;
     this.round = null;
@@ -261,6 +262,7 @@ class Lobby {
       size, minLen,
       time: clamp(s.time, 30, 600, this.settings.time),
       handicap: s.handicap == null ? this.settings.handicap : !!s.handicap,
+      funAwards: s.funAwards == null ? this.settings.funAwards : !!s.funAwards,
       chaos: s.chaos == null ? this.settings.chaos : !!s.chaos,
       chaosTypes: this.settings.chaosTypes,
       mode: s.mode === 'coop' || s.mode === 'versus' ? s.mode : this.settings.mode,
@@ -731,6 +733,28 @@ class Lobby {
         nextHcp: this.settings.handicap ? this.handicapIndex(m) : 0,
       });
     }
+    // For-fun awards: a few silly categories, each worth real points on top of the round.
+    let fun = [];
+    if (this.settings.funAwards && !r.coop) {
+      const wordCount = new Map(words.map(x => [x.w, x.finders.length]));
+      fun = funAwards.pick({
+        players: out.map(p => {
+          const own = [...(r.found.get(p.id) || new Map())].filter(([, x]) => x.via !== 'leak').sort((a, b) => a[1].at - b[1].at);
+          const st = r.stats.get(p.id) || { times: [], rejected: 0 };
+          return { id: p.id, name: p.name, gross: p.gross, ws: own.map(([w, x]) => ({ w, at: x.at, path: x.path })), tries: st.times.length, rejected: st.rejected || 0 };
+        }),
+        size: r.size, tiles: r.tiles, roundMs: r.endsAt - r.startAt, finders: wordCount,
+      });
+      for (const a of fun) for (const wnr of a.winners) {
+        const p = out.find(x => x.id === wnr.id);
+        const m = this.members.get(wnr.id);
+        if (!p) continue;
+        p.fun = (p.fun || 0) + a.pts;
+        p.round += a.pts;
+        if (m) m.total += a.pts;
+        p.total = m ? m.total : p.total + a.pts;
+      }
+    }
     const alliances = [...this.alliances.values()].map(a => {
       const mem = out.filter(p => p.alliance === a.id);
       return { ...a, members: mem.map(p => p.id), round: mem.reduce((s, p) => s + p.round, 0), total: mem.reduce((s, p) => s + p.total, 0) };
@@ -759,12 +783,13 @@ class Lobby {
     this.lastResults = {
       t: 'results', no: r.no, tiles: r.tiles, size: r.size, words, players: out, alliances, missed,
       possible: r.words.size, best: bestWord ? { w: bestWord.w, by: bestWord.finders.filter(id => bestWord.via[id] !== 'leak') } : null,
-      soloMult: SOLO_MULT, heat: { all: heatAll, by: heatBy }, badges, handicap: this.settings.handicap,
+      soloMult: SOLO_MULT, heat: { all: heatAll, by: heatBy }, badges, handicap: this.settings.handicap, fun,
       chaos: r.chaos.map(e => e.type), bananaSplit: r.bananaSplit,
       mode: r.mode,
       coop: r.coop ? { found: words.length, possible: r.words.size, turns: r.coop.turns, passes: r.coop.turns.length, points: out.reduce((sum, p) => sum + p.gross, 0) } : null,
     };
     this.banterLog = new Map();
+    this.bragLog = new Map();
     this.broadcast(this.lastResults);
     if (!r.coop) for (const b of players.filter(p => p.bot)) this.later(() => this.attitude(b, bots.attitude(b.bot)), 7000 + crypto.randomInt(9000));
     this.broadcastState();
@@ -804,6 +829,28 @@ class Lobby {
       margin: Math.max(1, ranked[0].round - me.round),
     });
     this.broadcast({ t: 'banter', id: m.id, role, text });
+  }
+
+  // Tap one of your words after the round to show off about it in the trash talk.
+  brag(m, raw) {
+    const R = this.lastResults;
+    if (!R || this.phase !== 'results' || m.role !== 'player') return;
+    const w = String(raw || '').toLowerCase().replace(/[^a-z]/g, '');
+    const wd = R.words.find(x => x.w === w);
+    if (!wd || !wd.finders.includes(m.id) || (wd.via && wd.via[m.id] === 'leak')) return;
+    const log = this.bragLog.get(m.id) || { words: new Set(), last: 0 };
+    if (log.words.has(w) || log.words.size >= 8 || Date.now() - log.last < 1500) return;
+    log.words.add(w); log.last = Date.now();
+    this.bragLog.set(m.id, log);
+    const others = R.players.filter(p => p.id !== m.id);
+    const missed = others.filter(p => !wd.finders.includes(p.id));
+    const pickOne = a => (a.length ? a[Math.floor(Math.random() * a.length)].name : '');
+    const kind = R.mode === 'coop' ? 'bragTeam' : wd.solo ? 'bragSolo' : missed.length ? 'bragSome' : 'bragAll';
+    const text = banter.line(kind, {
+      word: w.toUpperCase(), len: w.length, pts: wd.pts, other: pickOne(missed), anyone: pickOne(others),
+      count: wd.finders.length - 1,
+    });
+    this.broadcast({ t: 'banter', id: m.id, role: 'brag', word: w, text });
   }
 
   backToLobby(m) {

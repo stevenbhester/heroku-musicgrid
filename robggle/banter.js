@@ -37,11 +37,45 @@ const LINES = {
     'I\'m not mad. I\'m just going to sit over here. Quietly.',
     'The sun was in my eyes. Indoors. Yes.',
   ],
+  // Tapping one of your words after the round.
+  bragSolo: [
+    'Only I found {word}. Just saying.',
+    '{word}. Nobody else. Let that sink in.',
+    '{word}: {pts} points, all mine. Feel free to admire it.',
+    'Did anyone else see {word}? No? Interesting.',
+    "I'll be signing autographs for {word} later.",
+    '{word}. {len} letters of pure genius.',
+    'Some people find words. I find {word}.',
+    '{word}. Look it up. Oh wait, you never found it.',
+  ],
+  bragSome: [
+    '{other}, how did you miss {word}? It was RIGHT THERE.',
+    '{word}. Some of us have eyes, {other}.',
+    'Hey {other}, {word}. Write that down.',
+    '{word}! {other} is still looking for it.',
+    'Not to brag, but {word}. Okay, to brag.',
+    '{other}, I found {word}. Thoughts and prayers.',
+  ],
+  bragAll: [
+    'Everyone got {word}, but I got it with style.',
+    'Sure, everybody found {word}. I found it better.',
+    '{word} is mine. I just let the rest of you borrow it.',
+    'We all found {word}, but I want it noted that I loved it the most.',
+    '{word}. Classic me.',
+  ],
+  bragTeam: [
+    "Team, I'd like to point out that {word} was me.",
+    '{word}! You are welcome, team.',
+    'Put {word} on my highlight reel.',
+    'Not to brag, but {word}. Okay, a little brag.',
+    '{word}. Somebody frame that one.',
+  ],
 };
 
 function line(kind, ctx) {
   const pool = LINES[kind] || LINES.goodLoser;
-  const usable = pool.filter(t => (!t.includes('{word}') || ctx.word) && (!t.includes('{rejected}') || ctx.rejected) && (!t.includes('{other}') || ctx.other) && (!t.includes('{loser}') || ctx.loser));
+  // Skip lines that need something we don't have (no rejected word, nobody who missed it, ...).
+  const usable = pool.filter(t => [...t.matchAll(/\{(\w+)\}/g)].every(([, k]) => ctx[k] != null && ctx[k] !== ''));
   const t = usable[Math.floor(Math.random() * usable.length)] || pool[0];
   return t.replace(/\{(\w+)\}/g, (_, k) => (ctx[k] != null ? String(ctx[k]) : ''));
 }
