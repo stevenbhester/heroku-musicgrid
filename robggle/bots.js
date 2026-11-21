@@ -1,7 +1,7 @@
 // Computer players, named for the family. Each level plans its words at round start:
 // how many it finds, how long they are, how fast it gets going, and how often it fumbles.
 const crypto = require('crypto');
-const { common, valid } = require('./dict');
+const { common, valid, naughty } = require('./dict');
 
 const LEVELS = {
   tara:      { name: 'Tara',      label: 'Very easy', share: 0.06, max: 8,  maxLen: 4,  commonOnly: true,  first: [12, 20], typos: [1, 3], setPause: 1.0, voteYes: 0.75, attitude: { good: 0.9 } },
@@ -16,7 +16,7 @@ const between = (a, b) => a + rnd() * (b - a);
 // Returns [{ at (ms into round), w, path }] sorted by time.
 function plan(level, round, roundMs) {
   const L = LEVELS[level];
-  const all = [...round.words].filter(([w]) => w.length <= L.maxLen);
+  const all = [...round.words].filter(([w]) => w.length <= L.maxLen && !naughty.has(w)); // (the bots keep it clean)
   // Common words first; harder bots dip into rarer ones.
   let pool = all.filter(([w]) => common.has(w));
   if (!L.commonOnly) {

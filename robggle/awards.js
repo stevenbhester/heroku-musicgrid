@@ -1,6 +1,7 @@
 // For-fun awards: silly end-of-round categories worth real points, like bonus stars in a party game.
 // A few are picked at random each round from the ones somebody actually qualifies for. They can be
 // unfair (the lowest score gets a snack); that's the point.
+const { naughty } = require('./dict');
 const VOWELS = new Set('aeiou');
 const RARE = new Set('jkqxz');
 const SCRABBLE = { a: 1, b: 3, c: 3, d: 2, e: 1, f: 4, g: 2, h: 4, i: 1, j: 8, k: 5, l: 1, m: 3, n: 1, o: 1, p: 3, q: 10, r: 1, s: 1, t: 1, u: 1, v: 4, w: 4, x: 8, y: 4, z: 10 };
@@ -74,8 +75,6 @@ function catalog(g) {
       val: p => (p.gross > 0 && p.gross <= 21 ? { v: 21 - p.gross, d: `${p.gross} points` } : null) },
     { key: 'underdog', icon: 'gift', title: 'Underdog Snack', blurb: 'The lowest score gets a snack', low: true,
       val: p => ({ v: p.gross, d: `${n(p.gross, 'point')}, bless them` }) },
-    { key: 'selfie', icon: 'users', title: 'Name Dropper', blurb: 'Most words starting with the first letter of your name',
-      val: p => { const L = (p.name || '').toLowerCase().replace(/[^a-z]/g, '')[0]; return L ? tally(p.ws, x => x.w[0] === L, 1, `${U(L)} word`) : null; } },
     { key: 'busy', icon: 'pencil', title: 'Busy Thumbs', blurb: 'Most words tried, right or wrong',
       val: p => (p.tries ? { v: p.tries, d: n(p.tries, 'try', 'tries') } : null) },
     { key: 'scenic', icon: 'car', title: 'Scenic Route', blurb: 'Longest trip around the board in one word',
@@ -94,6 +93,8 @@ function catalog(g) {
       val: p => bestWord(p.ws, x => { if (!x.path || x.w.length < 3) return null; const s = steps(x.path); return s.every(([a, b]) => a === s[0][0] && b === s[0][1]) ? x.w.length : null; }, x => U(x.w)) },
     { key: 'anagram', icon: 'cards', title: 'Anagram Artist', blurb: 'Most pairs of words with the same letters',
       val: p => { const by = {}; for (const x of p.ws) { const k = [...x.w].sort().join(''); by[k] = (by[k] || 0) + 1; } const v = Object.values(by).reduce((s, c) => s + (c * (c - 1)) / 2, 0); return v ? { v, d: n(v, 'anagram pair') } : null; } },
+    { key: 'swearjar', icon: 'drop', title: 'Swear Jar', blurb: 'Most naughty words',
+      val: p => tally(p.ws, x => naughty.has(x.w), 1, 'naughty word') },
     { key: 'quality', icon: 'scroll', title: 'Quality Over Quantity', blurb: 'Longest average word',
       val: p => (p.ws.length >= 2 ? (v => ({ v, d: `${v.toFixed(1)} letters a word` }))(p.ws.reduce((s, x) => s + x.w.length, 0) / p.ws.length) : null) },
   ];

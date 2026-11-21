@@ -87,7 +87,14 @@ function award(ctx) {
   for (const p of players) {
     const s = st(p.id);
     if (s.lockouts) add(p.id, 49 + s.lockouts * 3, { key: 'nuhuh', icon: 'book', tone: 'bad', title: 'Nuh-Uh-Uh', desc: `Sent to time-out ${s.lockouts} time${s.lockouts === 1 ? '' : 's'} for guessing` });
-    if (s.wordleWin) add(p.id, 500, { key: 'wordle', icon: 'wordle', tone: 'good', title: 'Wordle Wizard', desc: `Got G-ma's Wordle in ${s.wordleWin}` });
+    if (s.wordleWin) {
+      const n = s.wordleWin;
+      // Under six guesses is its own badge; one or two guesses get the bragging-rights versions.
+      const title = n === 1 ? 'Wordle in ONE' : n === 2 ? 'Wordle in Two' : n < 6 ? 'Under Six' : 'Wordle Wizard';
+      const desc = n === 1 ? "Got G-ma's Wordle on the very first guess. Suspicious." : n === 2 ? "Got G-ma's Wordle in just 2 guesses" : n < 6 ? `Got G-ma's Wordle in ${n}, under six guesses` : `Got G-ma's Wordle in ${n}`;
+      add(p.id, 500, { key: 'wordle', icon: 'wordle', tone: 'good', title, desc });
+    }
+    if (s.naughty) add(p.id, 64 + s.naughty * 4, { key: 'potty', icon: 'drop', tone: 'funny', title: 'Potty Mouth', desc: `${s.naughty} word${s.naughty === 1 ? '' : 's'} that owe${s.naughty === 1 ? 's' : ''} the swear jar` });
     if (s.launchWords >= 2) add(p.id, 44 + s.launchWords * 2, { key: 'houston', icon: 'launch', tone: 'good', title: 'Houston, No Problem', desc: `${s.launchWords} words while your ${String(s.launchLetter || '?').toUpperCase()}'s were in space` });
   }
   for (const x of leaders(s => s.robbertWords || 0, 3)) add(x.id, 45 + x.v * 2, { key: 'robbertok', icon: 'three', tone: 'good', title: 'Robbert Approved', desc: `${x.v} three-letter words on command` });

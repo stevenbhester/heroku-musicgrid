@@ -1,7 +1,7 @@
 // One Lobby per game. The server is the only clock and the only judge of words.
 const crypto = require('crypto');
 const { deal, solve, points, fnv, common } = require('./board');
-const { valid } = require('./dict');
+const { valid, naughty } = require('./dict');
 const chaos = require('./chaos');
 const { award } = require('./badges');
 const banter = require('./banter');
@@ -277,6 +277,8 @@ class Lobby {
       if (picked.length) this.settings.chaosTypes = picked; // at least one stays on
     }
     if (process.env.ROBGGLE_DEV && Array.isArray(s.force)) this.devForce = s.force.length ? s.force.map(String) : null;
+    // Dev only: a fixed board ("damnshitpoopbutt"), to test particular words on purpose.
+    if (process.env.ROBGGLE_DEV && typeof s.board === 'string') this.devBoard = /^[a-z]+$/.test(s.board) && s.board.length === size * size ? s.board.split('') : null;
     this.broadcastState();
   }
 
@@ -289,7 +291,8 @@ class Lobby {
     const { size, minLen, time } = this.settings;
     const coop = this.settings.mode === 'coop';
     if (coop && !this.playerList().some(p => !p.bot)) return this.send(m, { t: 'error', msg: 'Pass the Pen needs at least one person.' });
-    const { tiles, words } = deal(size, minLen, coop ? 240 : time);
+    let { tiles, words } = deal(size, minLen, coop ? 240 : time);
+    if (process.env.ROBGGLE_DEV && this.devBoard && this.devBoard.length === size * size) { tiles = this.devBoard; words = solve(tiles, size, minLen); }
     const salt = crypto.randomBytes(4).toString('hex');
     const now = Date.now();
     // G-ma's Wordle needs 5-letter words in play, and a few everyday ones on the board to hide.
@@ -436,7 +439,7 @@ class Lobby {
       climb: r.climb.get(m.id) || null,
       launch: r.launch.get(m.id) ? { id: r.launch.get(m.id).id, letter: r.launch.get(m.id).letter, tiles: [...r.launch.get(m.id).tiles] } : null,
       lock: r.guess.get(m.id) ? Math.max(0, r.guess.get(m.id).until - Date.now()) : 0,
-      wordle: r.wordle ? { id: r.wordle.id, guesses: r.wordle.by.get(r.coop ? 'team' : m.id) || [], winner: r.wordle.winner, n: r.wordle.n, word: r.wordle.winner ? r.wordle.word : null } : null,
+      wordle: r.wordle ? { id: r.wordle.id, guesses: r.wordle.by.get(r.coop ? 'team' : m.id) || [], winner: r.wordle.winner, n: r.wordle.n, team: !!r.coop, word: r.wordle.winner && (r.coop || r.wordle.winner === m.id) ? r.wordle.word : null } : null,
       tips: [...r.tips].map(([w, x]) => ({ w, from: x.from, at: x.at })),
       handicap: this.settings.handicap,
       custom: [...this.customWords].map(w => fnv(r.salt + w)),
@@ -579,7 +582,10 @@ class Lobby {
       this.bump(m.id, 'leaked');
       this.later(() => this.broadcast({ t: 'tip', w, from: m.id, at: ms }), 30);
     }
-    reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined, bananaDone });
+    // A swear word: it counts like any other, and everyone hears that somebody said one (not which).
+    const rude = naughty.has(w);
+    if (rude) { this.bump(m.id, 'naughty'); this.later(() => this.broadcast({ t: 'naughty', id: m.id }), 40); }
+    reply(true, null, { pts: points(w) + bonus, bonus, leaked, path: banana ? path : undefined, bananaDone, naughty: rude || undefined });
     if (wordle) this.wordleGuess(m, w);
     if (c) {
       c.turnWords++;
@@ -621,6 +627,7 @@ class Lobby {
     const pool = [five.filter(w => common.has(w) && !played.has(w)), five.filter(w => !played.has(w)), five].find(p => p.length);
     if (!pool) return;
     r.wordle = { id: e.id, word: pool[crypto.randomInt(pool.length)], by: new Map(), winner: null, n: 0 };
+    if (process.env.ROBGGLE_DEV) console.log('DEV wordle word', this.code, r.wordle.word);
   }
 
   // In Pass the Pen the whole team shares one list of guesses and everyone sees every clue.
@@ -637,7 +644,8 @@ class Lobby {
     W.winner = m.id;
     W.n = list.length;
     for (const p of r.coop ? this.playerList() : [m]) this.stat(p.id).wordleWin = list.length;
-    this.broadcast({ t: 'wordleWin', id: m.id, n: list.length, word: W.word, team: !!r.coop });
+    // Only whoever got it sees the word (the whole team, in Pass the Pen): everyone else just hears who and in how many.
+    for (const x of this.members.values()) this.send(x, { t: 'wordleWin', id: m.id, n: list.length, team: !!r.coop, word: r.coop || x.id === m.id ? W.word : undefined });
   }
 
   // Pass the Pen: someone holds a letter to point at it, and it glows in their color for everyone.
@@ -655,7 +663,7 @@ class Lobby {
     const W = this.round && this.round.wordle;
     if (!W || W.winner || W.over) return;
     W.over = true;
-    this.broadcast({ t: 'wordleEnd', word: W.word });
+    this.broadcast({ t: 'wordleEnd' }); // (nobody got it, so nobody is told)
   }
 
   bananaCounts() {
@@ -820,7 +828,7 @@ class Lobby {
       const g = [...groups][0];
       const own = list.find(x => x.via !== 'leak') || list[0];
       words.push({
-        w, base, pts, solo, soloBy: solo ? (g.startsWith('a:') ? { alliance: g.slice(2) } : { player: g.slice(2) }) : null,
+        w, base, pts, solo, naughty: naughty.has(w) || undefined, soloBy: solo ? (g.startsWith('a:') ? { alliance: g.slice(2) } : { player: g.slice(2) }) : null,
         finders: list.map(x => x.id), bonus, via, path: own.path || r.words.get(w),
       });
     }
